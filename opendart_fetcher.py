@@ -9,6 +9,7 @@ in headless mode to print the DART viewer page to PDF.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import logging
 import os
@@ -17,6 +18,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -77,6 +80,28 @@ def get_bytes(endpoint: str, key: str, **params: str) -> bytes:
         except (UnicodeDecodeError, json.JSONDecodeError):
             raise OpenDartError(f"{endpoint}: response was not a ZIP file")
     return content
+
+
+def export_corporation_codes(key: str, output_path: Path) -> int:
+    """Download Open DART's corporation-code ZIP and write a pipe-delimited list."""
+    LOGGER.info("Downloading Open DART corporation-code registry")
+    archive = get_bytes("corpCode.xml", key)
+    with zipfile.ZipFile(io.BytesIO(archive)) as zf:
+        xml_name = next((name for name in zf.namelist() if name.upper().endswith("CORPCODE.XML")), None)
+        if not xml_name:
+            raise OpenDartError("corpCode.xml ZIP did not contain CORPCODE.xml")
+        root = ET.fromstring(zf.read(xml_name))
+    records = []
+    for item in root.findall(".//list"):
+        corp_code = (item.findtext("corp_code") or "").strip()
+        corp_name = (item.findtext("corp_name") or "").strip()
+        if corp_code and corp_name:
+            records.append((corp_code, corp_name))
+    records.sort(key=lambda row: row[0])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(f"{code} | {name}" for code, name in records) + "\n", encoding="utf-8-sig")
+    LOGGER.info("Wrote %d corporations to %s", len(records), output_path)
+    return len(records)
 
 
 def clean_number(value: Any) -> int | float | None:
@@ -237,7 +262,7 @@ def save_pdf(report: dict[str, Any], output: Path, browser: str | None) -> dict[
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--corp-code", required=True, help="8-digit Open DART corporation code")
+    parser.add_argument("--corp-code", required=False, help="8-digit Open DART corporation code")
     parser.add_argument("--api-key", default=os.getenv("OPENDART_API_KEY"), help="Open DART key, or set OPENDART_API_KEY")
     parser.add_argument("--out-dir", default="temp", help="Output directory")
     parser.add_argument("--output-json", default=None, help="JSON output path; defaults to <out-dir>/output.json")
@@ -245,10 +270,16 @@ def main() -> int:
     parser.add_argument("--log-file", default=None, help="Debug log path; defaults to <out-dir>/opendart_debug.log")
     parser.add_argument("--test-connection", action="store_true", help="Test API key and corporation code, then exit")
     parser.add_argument("--skip-pdf", action="store_true", help="Skip slow headless-browser PDF generation")
+    parser.add_argument("--export-corp-list", metavar="PATH", help="Export all corp-code | company name rows to PATH")
     args = parser.parse_args()
     if not args.api_key:
         parser.error("--api-key or OPENDART_API_KEY is required")
-    if not re.fullmatch(r"\d{8}", args.corp_code):
+    if args.export_corp_list:
+        export_path = Path(args.export_corp_list).resolve()
+        count = export_corporation_codes(args.api_key, export_path)
+        print(json.dumps({"ok": True, "count": count, "path": str(export_path)}, ensure_ascii=False, indent=2))
+        return 0
+    if not args.corp_code or not re.fullmatch(r"\d{8}", args.corp_code):
         parser.error("--corp-code must be exactly 8 digits")
 
     output = Path(args.out_dir).resolve()

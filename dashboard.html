@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Corporation Survey</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <style>
+    :root { --ink:#172033; --muted:#6b7280; --blue:#2563eb; --line:#e5e7eb; --card:#fff; --bg:#f5f7fb; }
+    body.dark { --ink:#e5e7eb; --muted:#9ca3af; --blue:#60a5fa; --line:#374151; --card:#1f2937; --bg:#111827; }
+    * { box-sizing:border-box; } body { margin:0; color:var(--ink); background:var(--bg); font-family:Inter,Segoe UI,Arial,sans-serif; transition:background .2s,color .2s; }
+    .wrap { max-width:1180px; margin:0 auto; padding:34px 22px 60px; }
+    .title-row { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; } h1 { margin:0 0 6px; font-size:32px; } .subtitle { color:var(--muted); margin-bottom:26px; }
+    .theme-toggle { padding:9px 13px; border:1px solid var(--line); background:var(--card); color:var(--ink); font-size:14px; }
+    .search { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; box-shadow:0 8px 24px #1d4ed80d; }
+    .search-row { display:flex; gap:10px; } input { flex:1; min-width:0; padding:13px 14px; border:1px solid #cbd5e1; border-radius:10px; font-size:16px; }
+    button { padding:0 22px; border:0; border-radius:10px; background:var(--blue); color:white; font-size:16px; cursor:pointer; } button:disabled { opacity:.55; cursor:wait; }
+    .suggestions { margin:8px 0 0; padding:0; list-style:none; max-height:230px; overflow:auto; border-radius:10px; }
+    .suggestions li { padding:10px 12px; border-bottom:1px solid var(--line); background:var(--card); cursor:pointer; } .suggestions li:hover { background:#eff6ff; }
+    .selected { margin-top:10px; color:var(--muted); font-size:14px; } .status { min-height:24px; margin:16px 0; color:var(--muted); }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; } .card, .panel { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; }
+    .label { color:var(--muted); font-size:13px; } .value { margin-top:7px; font-size:24px; font-weight:700; } .unit { color:var(--muted); font-size:12px; }
+    .panel { margin-top:18px; } .panel h2 { font-size:18px; margin:0 0 14px; } .chart-box { height:330px; position:relative; }
+    .company-meta { display:flex; gap:22px; flex-wrap:wrap; color:var(--muted); font-size:14px; margin:8px 0 18px; }
+    @media (max-width:800px) { .grid { grid-template-columns:repeat(2,1fr); } .search-row { flex-direction:column; } button { padding:12px; } }
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <div class="title-row"><div><h1>Corporation Survey</h1>
+  <div class="subtitle">Search Open DART corporations and review financial and employment indicators.</div>
+  </div><button id="themeToggle" class="theme-toggle" type="button">🌙 Dark</button></div>
+  <section class="search">
+    <div class="search-row"><input id="companyInput" autocomplete="off" placeholder="Search company name, e.g. 삼성"><button id="searchButton">Search</button></div>
+    <ul id="suggestions" class="suggestions"></ul>
+    <div id="selected" class="selected">No company selected</div>
+  </section>
+  <div id="status" class="status"></div>
+  <section id="results" hidden>
+    <div id="companyMeta" class="company-meta"></div>
+    <div class="grid">
+      <div class="card"><div class="label">Employees</div><div id="employees" class="value">—</div><div class="unit">latest annual report</div></div>
+      <div class="card"><div class="label">Average payroll</div><div id="payroll" class="value">—</div><div class="unit">KRW, latest annual report</div></div>
+      <div class="card"><div class="label">Assets</div><div id="assets" class="value">—</div><div class="unit">KRW million</div></div>
+      <div class="card"><div class="label">Revenue</div><div id="revenue" class="value">—</div><div class="unit">KRW million</div></div>
+      <div class="card"><div class="label">Operating income</div><div id="operating_income" class="value">—</div><div class="unit">KRW million</div></div>
+      <div class="card"><div class="label">Capital / equity</div><div id="equity" class="value">—</div><div class="unit">KRW million</div></div>
+      <div class="card"><div class="label">Debt / liabilities</div><div id="liabilities" class="value">—</div><div class="unit">KRW million</div></div>
+      <div class="card"><div class="label">Net income</div><div id="net_income" class="value">—</div><div class="unit">KRW million</div></div>
+    </div>
+    <div class="panel"><h2>Five-year annual trend</h2><div class="chart-box"><canvas id="annualChart"></canvas></div></div>
+    <div class="panel"><h2>Past-year quarterly financial trend</h2><div class="chart-box"><canvas id="quarterlyChart"></canvas></div></div>
+  </section>
+</main>
+<script>
+  const input = document.querySelector('#companyInput'), suggestions = document.querySelector('#suggestions'), selected = document.querySelector('#selected');
+  const statusEl = document.querySelector('#status'), results = document.querySelector('#results'), button = document.querySelector('#searchButton');
+  let selectedCompany = null, annualChart, quarterlyChart;
+  const dark = localStorage.getItem('corporation-survey-theme') === 'dark';
+  if (dark) document.body.classList.add('dark');
+  const themeToggle = document.querySelector('#themeToggle');
+  const updateThemeLabel = () => themeToggle.textContent = document.body.classList.contains('dark') ? '☀️ Light' : '🌙 Dark';
+  updateThemeLabel();
+  themeToggle.addEventListener('click', () => { document.body.classList.toggle('dark'); localStorage.setItem('corporation-survey-theme', document.body.classList.contains('dark') ? 'dark' : 'light'); updateThemeLabel(); });
+  const fmt = (n) => n == null ? '—' : new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(n);
+  const searchCompanies = async () => { const q=input.value.trim(); if(!q){suggestions.innerHTML=''; return;} const data=await fetch('/api/search?q='+encodeURIComponent(q)).then(r=>r.json()); suggestions.innerHTML=data.map(c=>`<li data-code="${c.corp_code}" data-name="${c.corp_name}">${c.corp_name} <small>${c.corp_code}</small></li>`).join(''); };
+  input.addEventListener('input', searchCompanies);
+  input.addEventListener('keydown', e => { if(e.key==='Enter'){e.preventDefault(); if(selectedCompany) loadCompany(); else if(suggestions.firstElementChild) suggestions.firstElementChild.click();} });
+  suggestions.addEventListener('click', e => { const li=e.target.closest('li'); if(!li)return; selectedCompany={corp_code:li.dataset.code,corp_name:li.dataset.name}; input.value=selectedCompany.corp_name; selected.textContent=`Selected: ${selectedCompany.corp_name} (${selectedCompany.corp_code})`; suggestions.innerHTML=''; });
+  button.addEventListener('click', () => { if(selectedCompany) loadCompany(); else statusEl.textContent='Select a company first.'; });
+  function setCard(id, value) { document.querySelector('#'+id).textContent=fmt(value); }
+  function rowValue(obj, key) { return obj && obj[key] != null ? obj[key] : null; }
+  function drawCharts(data) {
+    annualChart?.destroy(); quarterlyChart?.destroy();
+    const periodLabel = p => String(p).replace(/^20/, "'");
+    const common = {responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{labels:{color:getComputedStyle(document.body).getPropertyValue('--ink')}}},scales:{y:{beginAtZero:false,title:{display:true,text:'KRW million'},ticks:{callback:v=>fmt(v)}},y1:{position:'right',grid:{drawOnChartArea:false},title:{display:true,text:'Operating income %'},ticks:{callback:v=>v+'%'}}}};
+    annualChart = new Chart(document.querySelector('#annualChart'), {type:'bar', data:{labels:data.annual.map(x=>x.year), datasets:[
+      {type:'bar',label:'Revenue',data:data.annual.map(x=>x.revenue),backgroundColor:'#2563eb'},
+      {type:'bar',label:'Operating income',data:data.annual.map(x=>x.operating_income),backgroundColor:'#16a34a'},
+      {type:'bar',label:'Net income',data:data.annual.map(x=>x.net_income),backgroundColor:'#f97316'},
+      {type:'line',label:'Operating income %',data:data.annual.map(x=>x.operating_income_pct),borderColor:'#dc2626',backgroundColor:'#dc2626',yAxisID:'y1',tension:.25}
+    ]}, options:common});
+    quarterlyChart = new Chart(document.querySelector('#quarterlyChart'), {type:'bar', data:{labels:data.quarterly.map(x=>periodLabel(x.period)), datasets:[
+      {type:'bar',label:'Revenue',data:data.quarterly.map(x=>x.revenue),backgroundColor:'#7c3aed'},
+      {type:'bar',label:'Operating income',data:data.quarterly.map(x=>x.operating_income),backgroundColor:'#0891b2'},
+      {type:'bar',label:'Net income',data:data.quarterly.map(x=>x.net_income),backgroundColor:'#f59e0b'},
+      {type:'line',label:'Operating income %',data:data.quarterly.map(x=>x.operating_income_pct),borderColor:'#dc2626',backgroundColor:'#dc2626',yAxisID:'y1',tension:.25}
+    ]}, options:common});
+  }
+  async function loadCompany() {
+    button.disabled=true; statusEl.textContent='Fetching Open DART data…'; results.hidden=true;
+    try { const data=await fetch('/api/company?corp_code='+selectedCompany.corp_code).then(async r=>{const j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j;});
+      const c=data.company, latest=data.annual.at(-1)||{}, emp=data.employment[0]||{};
+      document.querySelector('#companyMeta').textContent=`${c.corp_name||selectedCompany.corp_name} · ${c.stock_code||'unlisted'} · ${c.hm_url||''}`;
+      setCard('employees', Number(String(emp.sm||emp.rgllbr_co||'').replaceAll(',',''))||null); setCard('payroll', Number(String(emp.jan_salary_am||'').replaceAll(',',''))||null);
+      ['assets','revenue','operating_income','equity','liabilities','net_income'].forEach(k=>setCard(k,rowValue(latest,k))); drawCharts(data); results.hidden=false; statusEl.textContent=`Loaded ${c.corp_name||selectedCompany.corp_name}.`;
+    } catch(e) { statusEl.textContent='Error: '+e.message; } finally { button.disabled=false; }
+  }
+</script>
+</body>
+</html>

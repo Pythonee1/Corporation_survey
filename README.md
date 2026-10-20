@@ -38,6 +38,30 @@ To skip slow browser-based PDF generation and fetch only JSON data plus the orig
 python .\opendart_fetcher.py --corp-code 00126380 --skip-pdf
 ```
 
+To export every Open DART corporation code and company name:
+
+```powershell
+python .\opendart_fetcher.py --export-corp-list .\temp\corporations.txt
+```
+
+The file uses this format:
+
+```text
+corp-code | company name
+```
+
+## Local HTML dashboard
+
+First create the corporation lookup file, then start the local dashboard:
+
+```powershell
+python .\opendart_fetcher.py --export-corp-list .\temp\corporations.txt
+$env:OPENDART_API_KEY = "your-40-character-key"
+python .\dashboard_server.py
+```
+
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Type a company name such as `삼성`, select a suggestion, and click **Search** or press Enter. The dashboard keeps the API key in the Python backend and shows annual and quarterly charts in the browser.
+
 Or pass the key directly:
 
 ```powershell
