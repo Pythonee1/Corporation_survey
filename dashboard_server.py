@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import re
@@ -12,6 +13,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
+
+from naver_route import NaverRouteError, public_transit_route
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -184,6 +187,8 @@ def company_data(key, corp_code):
 class Handler(BaseHTTPRequestHandler):
     corporations = []
     api_key = ""
+    naver_client_id = ""
+    naver_client_secret = ""
 
     def send_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -216,6 +221,15 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"error": str(exc)}, 500)
             return
+        if parsed.path == "/api/route":
+            address = parse_qs(parsed.query).get("address", [""])[0].strip()
+            try:
+                self.send_json(public_transit_route(address, self.naver_client_id, self.naver_client_secret))
+            except NaverRouteError as exc:
+                self.send_json({"error": str(exc)}, 503)
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, 503)
+            return
         self.send_error(404)
 
 
@@ -224,14 +238,22 @@ def main():
     parser.add_argument("--api-key", default=os.getenv("OPENDART_API_KEY"))
     parser.add_argument("--corporations", default="temp/corporations.txt")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--naver-client-id", default=os.getenv("NAVER_MAP_CLIENT_ID"))
+    parser.add_argument("--naver-client-secret", default=os.getenv("NAVER_MAP_CLIENT_SECRET"))
     args = parser.parse_args()
     if not args.api_key:
         parser.error("--api-key or OPENDART_API_KEY is required")
+    if not args.naver_client_id:
+        args.naver_client_id = input("Naver Maps Client ID (press Enter to disable routes): ").strip()
+    if not args.naver_client_secret and args.naver_client_id:
+        args.naver_client_secret = getpass.getpass("Naver Maps Client Secret: ").strip()
     corp_path = Path(args.corporations)
     if not corp_path.is_absolute():
         corp_path = ROOT / corp_path
     Handler.corporations = load_corporations(corp_path)
     Handler.api_key = args.api_key
+    Handler.naver_client_id = args.naver_client_id or ""
+    Handler.naver_client_secret = args.naver_client_secret or ""
     print(f"Loaded {len(Handler.corporations):,} corporations")
     print(f"Open http://127.0.0.1:{args.port} in your browser")
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()

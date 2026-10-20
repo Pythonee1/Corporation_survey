@@ -21,7 +21,8 @@
     .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; } .card, .panel { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; }
     .label { color:var(--muted); font-size:13px; } .value { margin-top:7px; font-size:24px; font-weight:700; } .unit { color:var(--muted); font-size:12px; }
     .panel { margin-top:18px; } .panel h2 { font-size:18px; margin:0 0 14px; } .chart-box { height:330px; position:relative; }
-    .company-meta { display:flex; gap:22px; flex-wrap:wrap; color:var(--muted); font-size:14px; margin:8px 0 18px; }
+    .company-meta { display:flex; gap:22px; flex-wrap:wrap; color:var(--muted); font-size:14px; margin:8px 0 10px; }
+    .route-link { display:inline-block; margin-bottom:18px; padding:9px 13px; background:#16a34a; color:#fff; border-radius:9px; text-decoration:none; font-size:14px; }
     @media (max-width:800px) { .grid { grid-template-columns:repeat(2,1fr); } .search-row { flex-direction:column; } button { padding:12px; } }
   </style>
 </head>
@@ -38,6 +39,7 @@
   <div id="status" class="status"></div>
   <section id="results" hidden>
     <div id="companyMeta" class="company-meta"></div>
+    <a id="routeLink" class="route-link" href="#" hidden>🚇 Find subway route from 서울 금천구 가산디지털2로 61</a>
     <div class="grid">
       <div class="card"><div class="label">Employees</div><div id="employees" class="value">—</div><div class="unit">latest annual report</div></div>
       <div class="card"><div class="label">Average payroll</div><div id="payroll" class="value">—</div><div class="unit">KRW, latest annual report</div></div>
@@ -91,7 +93,11 @@
     button.disabled=true; statusEl.textContent='Fetching Open DART data…'; results.hidden=true;
     try { const data=await fetch('/api/company?corp_code='+selectedCompany.corp_code).then(async r=>{const j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j;});
       const c=data.company, latest=data.annual.at(-1)||{}, emp=data.employment[0]||{};
-      document.querySelector('#companyMeta').textContent=`${c.corp_name||selectedCompany.corp_name} · ${c.stock_code||'unlisted'} · ${c.hm_url||''}`;
+      document.querySelector('#companyMeta').textContent=`${c.corp_name||selectedCompany.corp_name} · ${c.stock_code||'unlisted'} · ${c.adres||'Address unavailable'}${c.hm_url ? ` · ${c.hm_url}` : ''}`;
+      const routeLink=document.querySelector('#routeLink'); routeLink.hidden=true;
+      if (c.adres) {
+        fetch('/api/route?address='+encodeURIComponent(c.adres)).then(async r=>{const route=await r.json();if(!r.ok)throw Error(route.error||'Route unavailable');return route;}).then(route=>{routeLink.href=route.url;routeLink.target='_blank';routeLink.title='Open Naver Maps public-transit route';routeLink.hidden=false;}).catch(e=>{routeLink.title=e.message;});
+      }
       setCard('employees', Number(String(emp.sm||emp.rgllbr_co||'').replaceAll(',',''))||null); setCard('payroll', Number(String(emp.jan_salary_am||'').replaceAll(',',''))||null);
       ['assets','revenue','operating_income','equity','liabilities','net_income'].forEach(k=>setCard(k,rowValue(latest,k))); drawCharts(data); results.hidden=false; statusEl.textContent=`Loaded ${c.corp_name||selectedCompany.corp_name}.`;
     } catch(e) { statusEl.textContent='Error: '+e.message; } finally { button.disabled=false; }
