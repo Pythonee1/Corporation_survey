@@ -1,4 +1,4 @@
-.env
-*.log
-*.json
-*.zip
+*.csv
+*.xlsx
+*.env
+__pycache__/
