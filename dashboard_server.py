@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
 from datetime import date, timedelta
@@ -291,6 +292,7 @@ def main():
     parser.add_argument("--api-key", default=os.getenv("OPENDART_API_KEY"))
     parser.add_argument("--corporations", default="temp/corporations.txt")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", default="0.0.0.0", help="Use 127.0.0.1 to restrict access to this computer only")
     args = parser.parse_args()
     if not args.api_key:
         parser.error("--api-key or OPENDART_API_KEY is required")
@@ -300,8 +302,15 @@ def main():
     Handler.corporations = load_corporations(corp_path)
     Handler.api_key = args.api_key
     print(f"Loaded {len(Handler.corporations):,} corporations")
-    print(f"Open http://127.0.0.1:{args.port} in your browser")
-    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+    print(f"Open http://127.0.0.1:{args.port} on this computer")
+    if args.host == "0.0.0.0":
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                probe.connect(("8.8.8.8", 80))
+                print(f"Open http://{probe.getsockname()[0]}:{args.port} on your phone (same Wi-Fi)")
+        except OSError:
+            print("Could not detect LAN IP; run ipconfig to find it")
+    ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 
 
 if __name__ == "__main__":
