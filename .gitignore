@@ -3,3 +3,8 @@
 *.json
 *.zip
 *.pyc
+*.csv
+*.xlsx
+*.env
+__pycache__/
+
