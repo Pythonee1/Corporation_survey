@@ -62,7 +62,11 @@ python .\dashboard_server.py
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Type a company name such as `삼성`, select a suggestion, and click **Search** or press Enter. The dashboard keeps the API key in the Python backend and shows annual and quarterly charts in the browser.
 
-To enable the Naver public-transit route button from `서울 금천구 가산디지털2로 61` to the selected company address, create Naver Maps API credentials and set:
+The dashboard's public-transit route starts at `START_ADDRESS` in
+`naver_route.py` and ends at the selected company address. Change that one
+constant to change both the dashboard and CLI defaults.
+
+To enable Naver Maps API features, create Naver Maps API credentials and set:
 
 ```powershell
 $env:NAVER_MAP_CLIENT_ID = "your-naver-client-id"
@@ -70,11 +74,12 @@ $env:NAVER_MAP_CLIENT_SECRET = "your-naver-client-secret"
 python .\dashboard_server.py
 ```
 
-The route button opens Naver Maps' public-transport route scheme. Naver's geocoding service requires these credentials, and the Naver Maps app must support the `nmap://` URL scheme on the device. [Naver Maps URL scheme documentation](https://guide.ncloud-docs.com/docs/en/maps-url-scheme)
+The dashboard's public-transit panel uses a browser session for Naver Maps
+directions. It does not require geocoding credentials; the CLI's geocoding and
+driving-route commands do require the appropriate Naver Maps API credentials.
 
-Naver route functionality is isolated in `naver_route.py`; `dashboard_server.py` imports its geocoding and public-transit route functions.
-
-You can also test the route module directly:
+You can also query a driving route directly. The command prints a compact
+summary with distance, duration, toll, taxi fare, and fuel cost:
 
 ```powershell
 $env:NAVER_MAP_CLIENT_ID = "your-client-id"
@@ -82,13 +87,32 @@ $env:NAVER_MAP_CLIENT_SECRET = "your-client-secret"
 python .\naver_route.py "서울특별시 중구 세종대로 67"
 ```
 
-`naver_route.py` reads the Naver credentials from the environment and prints the values it is using before making the request. This is useful for troubleshooting, but avoid sharing the console output because it contains the client secret.
+`naver_route.py` reads the Naver credentials from the environment. The driving
+route uses Directions 5 and requires that API to be enabled in the Maps
+application.
 
 Use `--start` to override the default starting address:
 
 ```powershell
 python .\naver_route.py "서울특별시 중구 세종대로 67" --start "서울 금천구 가산디지털2로 61"
 ```
+
+To generate the Naver Maps public-transit app URL used by the dashboard, add
+`--public-transit-url`.
+
+The dashboard opens Naver Maps in headless Microsoft Edge with a dedicated
+profile saved in `temp/naver-browser-profile/`. It reuses that profile's login,
+cache, and browser for later searches, including after restarting the server.
+Your regular Edge login is not copied. To sign in or refresh an expired login,
+set `NAVER_HEADLESS=0` before starting the dashboard server, sign in in the
+visible browser, then restart the server without that setting.
+Naver Maps resolves the start and destination inside its own directions form,
+so the dashboard does not make separate Maps Geocoding API requests. It sends
+the first public-transit route to the left panel, then takes a screenshot of
+that same page for the right panel. Edge and Node.js with
+Playwright are required. This machine's bundled Codex runtime is used by
+default; alternatively set `NAVER_NODE_PATH`, `NAVER_PLAYWRIGHT_MODULE`, and
+`NAVER_EDGE_PATH` for custom installations.
 
 Or pass the key directly:
 

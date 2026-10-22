@@ -17,13 +17,26 @@
     button { padding:0 22px; border:0; border-radius:10px; background:var(--blue); color:white; font-size:16px; cursor:pointer; } button:disabled { opacity:.55; cursor:wait; }
     .suggestions { margin:8px 0 0; padding:0; list-style:none; max-height:230px; overflow:auto; border-radius:10px; }
     .suggestions li { padding:10px 12px; border-bottom:1px solid var(--line); background:var(--card); cursor:pointer; } .suggestions li:hover { background:#eff6ff; }
+    .suggestions li.active { background:#dbeafe; outline:2px solid var(--blue); outline-offset:-2px; }
     .selected { margin-top:10px; color:var(--muted); font-size:14px; } .status { min-height:24px; margin:16px 0; color:var(--muted); }
     .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; } .card, .panel { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; }
     .label { color:var(--muted); font-size:13px; } .value { margin-top:7px; font-size:24px; font-weight:700; } .unit { color:var(--muted); font-size:12px; }
     .panel { margin-top:18px; } .panel h2 { font-size:18px; margin:0 0 14px; } .chart-box { height:330px; position:relative; }
     .company-meta { display:flex; gap:22px; flex-wrap:wrap; color:var(--muted); font-size:14px; margin:8px 0 10px; }
-    .route-link { display:inline-block; margin-bottom:18px; padding:9px 13px; background:#16a34a; color:#fff; border-radius:9px; text-decoration:none; font-size:14px; }
-    @media (max-width:800px) { .grid { grid-template-columns:repeat(2,1fr); } .search-row { flex-direction:column; } button { padding:12px; } }
+    .route-link { display:inline-block; margin-bottom:6px; padding:9px 13px; background:#16a34a; color:#fff; border-radius:9px; text-decoration:none; font-size:14px; }
+    .route-note { margin:0 0 18px; color:var(--muted); font-size:12px; }
+    .route-panel { margin:0 0 18px; background:var(--card); border:1px solid var(--line); border-radius:16px; overflow:hidden; }
+    .route-panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 14px; border-bottom:1px solid var(--line); }
+    .route-panel-head a, .route-panel-head button { color:var(--blue); background:none; border:0; cursor:pointer; font-size:13px; }
+    .route-panel-body { display:grid; grid-template-columns:minmax(300px,.9fr) minmax(420px,1.1fr); }
+    .route-details { min-width:0; }
+    .route-summary { padding:14px; font-weight:700; }
+    .route-steps { margin:0; padding:0 14px 14px 34px; }
+    .route-steps li { padding:7px 0; color:var(--ink); }
+    .route-destination { padding:0 14px 16px; color:var(--ink); font-size:16px; }
+    .route-screenshot-wrap { min-height:360px; border-left:1px solid var(--line); background:#eef0f3; display:flex; align-items:flex-start; justify-content:center; }
+    .route-screenshot { display:block; width:100%; height:auto; max-height:650px; object-fit:contain; }
+    @media (max-width:800px) { .grid { grid-template-columns:repeat(2,1fr); } .search-row { flex-direction:column; } button { padding:12px; } .route-panel-body { grid-template-columns:1fr; } .route-screenshot-wrap { border-left:0; border-top:1px solid var(--line); } }
   </style>
 </head>
 <body>
@@ -39,7 +52,24 @@
   <div id="status" class="status"></div>
   <section id="results" hidden>
     <div id="companyMeta" class="company-meta"></div>
-    <a id="routeLink" class="route-link" href="#" hidden>🚇 Find subway route from 서울 금천구 가산디지털2로 61</a>
+    <a id="routeLink" class="route-link" href="#" hidden>🚇 Open public-transit route in Naver Maps</a>
+    <p id="routeNote" class="route-note" hidden>Shows Naver Maps directions below without leaving this page.</p>
+    <section id="routePanel" class="route-panel" hidden>
+      <div class="route-panel-head">
+        <span>Public-transit route</span>
+        <span><a id="routeFullLink" href="#" target="_blank" rel="noopener" hidden>Open full page</a> · <button id="routeClose" type="button">Close</button></span>
+      </div>
+      <div class="route-panel-body">
+        <div class="route-details">
+          <div id="routeSummary" class="route-summary"></div>
+          <ol id="routeSteps" class="route-steps"></ol>
+          <div id="routeDestination" class="route-destination"></div>
+        </div>
+        <div id="routeScreenshotWrap" class="route-screenshot-wrap" hidden>
+          <img id="routeScreenshot" class="route-screenshot" alt="Naver Maps public-transit route map">
+        </div>
+      </div>
+    </section>
     <div class="grid">
       <div class="card"><div class="label">Employees</div><div id="employees" class="value">—</div><div class="unit">latest annual report</div></div>
       <div class="card"><div class="label">Average payroll</div><div id="payroll" class="value">—</div><div class="unit">KRW, latest annual report</div></div>
@@ -57,7 +87,7 @@
 <script>
   const input = document.querySelector('#companyInput'), suggestions = document.querySelector('#suggestions'), selected = document.querySelector('#selected');
   const statusEl = document.querySelector('#status'), results = document.querySelector('#results'), button = document.querySelector('#searchButton');
-  let selectedCompany = null, annualChart, quarterlyChart;
+  let selectedCompany = null, annualChart, quarterlyChart, suggestionIndex = -1;
   const dark = localStorage.getItem('corporation-survey-theme') === 'dark';
   if (dark) document.body.classList.add('dark');
   const themeToggle = document.querySelector('#themeToggle');
@@ -65,10 +95,10 @@
   updateThemeLabel();
   themeToggle.addEventListener('click', () => { document.body.classList.toggle('dark'); localStorage.setItem('corporation-survey-theme', document.body.classList.contains('dark') ? 'dark' : 'light'); updateThemeLabel(); });
   const fmt = (n) => n == null ? '—' : new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(n);
-  const searchCompanies = async () => { const q=input.value.trim(); if(!q){suggestions.innerHTML=''; return;} const data=await fetch('/api/search?q='+encodeURIComponent(q)).then(r=>r.json()); suggestions.innerHTML=data.map(c=>`<li data-code="${c.corp_code}" data-name="${c.corp_name}">${c.corp_name} <small>${c.corp_code}</small></li>`).join(''); };
+  const searchCompanies = async () => { selectedCompany=null; suggestionIndex=-1; const q=input.value.trim(); if(!q){suggestions.innerHTML=''; return;} const data=await fetch('/api/search?q='+encodeURIComponent(q)).then(r=>r.json()); suggestions.innerHTML=data.map(c=>`<li data-code="${c.corp_code}" data-name="${c.corp_name}">${c.corp_name} <small>${c.corp_code}</small></li>`).join(''); };
   input.addEventListener('input', searchCompanies);
-  input.addEventListener('keydown', e => { if(e.key==='Enter'){e.preventDefault(); if(selectedCompany) loadCompany(); else if(suggestions.firstElementChild) suggestions.firstElementChild.click();} });
-  suggestions.addEventListener('click', e => { const li=e.target.closest('li'); if(!li)return; selectedCompany={corp_code:li.dataset.code,corp_name:li.dataset.name}; input.value=selectedCompany.corp_name; selected.textContent=`Selected: ${selectedCompany.corp_name} (${selectedCompany.corp_code})`; suggestions.innerHTML=''; });
+  input.addEventListener('keydown', e => { const items=[...suggestions.querySelectorAll('li')]; if(e.key==='ArrowDown'||e.key==='ArrowUp'){if(!items.length)return; e.preventDefault(); suggestionIndex=(suggestionIndex+(e.key==='ArrowDown'?1:-1)+items.length)%items.length; items.forEach((item,index)=>item.classList.toggle('active',index===suggestionIndex)); items[suggestionIndex].scrollIntoView({block:'nearest'}); return;} if(e.key==='Enter'){e.preventDefault(); if(selectedCompany){loadCompany();} else if(items.length){(items[suggestionIndex>=0?suggestionIndex:0]).click();}} });
+  suggestions.addEventListener('click', e => { const li=e.target.closest('li'); if(!li)return; selectedCompany={corp_code:li.dataset.code,corp_name:li.dataset.name}; input.value=selectedCompany.corp_name; selected.textContent=`Selected: ${selectedCompany.corp_name} (${selectedCompany.corp_code})`; suggestions.innerHTML=''; suggestionIndex=-1; input.focus(); });
   button.addEventListener('click', () => { if(selectedCompany) loadCompany(); else statusEl.textContent='Select a company first.'; });
   function setCard(id, value) { document.querySelector('#'+id).textContent=fmt(value); }
   function rowValue(obj, key) { return obj && obj[key] != null ? obj[key] : null; }
@@ -89,19 +119,72 @@
       {type:'line',label:'Operating income %',data:data.quarterly.map(x=>x.operating_income_pct),borderColor:'#dc2626',backgroundColor:'#dc2626',yAxisID:'y1',tension:.25}
     ]}, options:common});
   }
+  let routeRequestId = 0;
+  async function streamNaverRoute(address, requestId) {
+    const routeSummary=document.querySelector('#routeSummary'), routeSteps=document.querySelector('#routeSteps');
+    const routeDestination=document.querySelector('#routeDestination'), routeNote=document.querySelector('#routeNote');
+    const routeLink=document.querySelector('#routeLink'), routeFullLink=document.querySelector('#routeFullLink');
+    const routeScreenshot=document.querySelector('#routeScreenshot'), routeScreenshotWrap=document.querySelector('#routeScreenshotWrap');
+    let receivedRoute=false;
+    try {
+      const response=await fetch('/api/route-stream?address='+encodeURIComponent(address));
+      if(!response.ok){const error=await response.json();throw Error(error.error||'Route unavailable');}
+      const reader=response.body.getReader(), decoder=new TextDecoder();
+      let pending='';
+      while(true){
+        const {value,done}=await reader.read();
+        pending+=decoder.decode(value||new Uint8Array(),{stream:!done});
+        const lines=pending.split('\n'); pending=lines.pop();
+        for(const line of lines){
+          if(!line.trim())continue;
+          const event=JSON.parse(line);
+          if(requestId!==routeRequestId){await reader.cancel();return;}
+          if(event.type==='error')throw Error(event.error||'Naver Maps route unavailable');
+          if(event.type==='route'){
+            receivedRoute=true;
+            const details=event.details, url=event.web_url;
+            routeSummary.textContent=`Timespan: ${details.timespan} · Walk (Total): ${details.walk_total}`;
+            routeSteps.replaceChildren();
+            details.steps.forEach(step=>{const item=document.createElement('li');item.textContent=[step.label,step.station,step.duration].filter(Boolean).join(' | ');routeSteps.appendChild(item);});
+            routeDestination.textContent=details.destination ? `Destination: ${details.destination}` : '';
+            routeFullLink.href=url;routeFullLink.hidden=false;
+            routeLink.href=url;routeLink.hidden=false;
+            routeLink.onclick=event=>{event.preventDefault();document.querySelector('#routePanel').hidden=false;document.querySelector('#routePanel').scrollIntoView({behavior:'smooth',block:'start'});};
+            routeNote.textContent='Route loaded. Capturing the map…';
+          }
+          if(event.type==='screenshot'){
+            routeScreenshot.src=`data:image/png;base64,${event.screenshot_data}`;
+            routeScreenshotWrap.hidden=false;
+            routeNote.textContent='Route and map loaded.';
+          }
+        }
+        if(done)break;
+      }
+      if(!receivedRoute)throw Error('Naver Maps returned no route');
+    }catch(error){
+      if(requestId!==routeRequestId)return;
+      if(!receivedRoute)routeSummary.textContent='Route unavailable';
+      routeNote.textContent=(receivedRoute?'Map screenshot unavailable: ':'Route details unavailable: ')+error.message;
+    }
+  }
   async function loadCompany() {
+    const requestId=++routeRequestId;
     button.disabled=true; statusEl.textContent='Fetching Open DART data…'; results.hidden=true;
     try { const data=await fetch('/api/company?corp_code='+selectedCompany.corp_code).then(async r=>{const j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j;});
       const c=data.company, latest=data.annual.at(-1)||{}, emp=data.employment[0]||{};
       document.querySelector('#companyMeta').textContent=`${c.corp_name||selectedCompany.corp_name} · ${c.stock_code||'unlisted'} · ${c.adres||'Address unavailable'}${c.hm_url ? ` · ${c.hm_url}` : ''}`;
-      const routeLink=document.querySelector('#routeLink'); routeLink.hidden=true;
+      const routeLink=document.querySelector('#routeLink'); const routeNote=document.querySelector('#routeNote'); const routePanel=document.querySelector('#routePanel'); const routeFullLink=document.querySelector('#routeFullLink'); const routeSummary=document.querySelector('#routeSummary'); const routeSteps=document.querySelector('#routeSteps'); const routeDestination=document.querySelector('#routeDestination'); const routeScreenshotWrap=document.querySelector('#routeScreenshotWrap'); const routeScreenshot=document.querySelector('#routeScreenshot'); routeLink.hidden=true; routeNote.hidden=true; routePanel.hidden=true; routeFullLink.hidden=true; routeFullLink.removeAttribute('href'); routeSummary.textContent=''; routeSteps.replaceChildren(); routeDestination.textContent=''; routeScreenshotWrap.hidden=true; routeScreenshot.removeAttribute('src');
       if (c.adres) {
-        fetch('/api/route?address='+encodeURIComponent(c.adres)).then(async r=>{const route=await r.json();if(!r.ok)throw Error(route.error||'Route unavailable');return route;}).then(route=>{routeLink.href=route.url;routeLink.target='_blank';routeLink.title='Open Naver Maps public-transit route';routeLink.hidden=false;}).catch(e=>{routeLink.title=e.message;});
+        routePanel.hidden=false; routeSummary.textContent='Loading Naver Maps public-transit route…'; routeNote.textContent='Searching the route in Naver Maps…'; routeNote.hidden=false;
+        streamNaverRoute(c.adres,requestId);
+      } else {
+        routePanel.hidden=false; routeSummary.textContent='Route unavailable'; routeNote.textContent='This company does not have a usable address.'; routeNote.hidden=false;
       }
       setCard('employees', Number(String(emp.sm||emp.rgllbr_co||'').replaceAll(',',''))||null); setCard('payroll', Number(String(emp.jan_salary_am||'').replaceAll(',',''))||null);
       ['assets','revenue','operating_income','equity','liabilities','net_income'].forEach(k=>setCard(k,rowValue(latest,k))); drawCharts(data); results.hidden=false; statusEl.textContent=`Loaded ${c.corp_name||selectedCompany.corp_name}.`;
     } catch(e) { statusEl.textContent='Error: '+e.message; } finally { button.disabled=false; }
   }
+  document.querySelector('#routeClose').addEventListener('click',()=>{document.querySelector('#routePanel').hidden=true;});
 </script>
 </body>
 </html>
