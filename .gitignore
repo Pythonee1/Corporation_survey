@@ -1,10 +1,21 @@
 .env
-*.log
 *.json
 *.zip
-*.pyc
 *.csv
 *.xlsx
 *.env
-__pycache__/
 
+# Cache
+.cache/
+cache/
+__pycache__/
+*.pyc
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
