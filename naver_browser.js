@@ -16,20 +16,36 @@ async function selectAddress(page, position, address) {
   const clean = address.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
   const road = clean.match(/^(.+?(?:로\d*길|로|길)\s*\d+(?:-\d+)?)(?:\s|$)/)?.[1];
   const queries = [...new Set([address, clean, road].filter(Boolean))];
+  const exactAddress = clean.match(/([^\s]+(?:로\d*길|로|길|동))\s*(\d+(?:-\d+)?)(?:\s|$)/);
   for (const query of queries) {
     await container.locator("input.input_search").fill(query);
-    // Naver uses several suggestion item types depending on the address and
-    // region. Select the first instant-search result regardless of type.
-    const place = container.locator("[id^='instant-search-item-']").first();
+    // The `ac` row runs a general map search; only POI/address rows set a
+    // directions endpoint. The first POI may be a different street number.
+    const places = container.locator(
+      "[id^='instant-search-item-poi-'], [id^='instant-search-item-address-']"
+    );
     try {
-      await place.waitFor({ state: "visible", timeout: 7000 });
+      await places.first().waitFor({ state: "visible", timeout: 10000 });
+      const options = await places.all();
+      let place = options[0];
+      if (exactAddress) {
+        const [, street, number] = exactAddress;
+        const matches = await Promise.all(options.map(async (option) => {
+          const value = (await option.innerText()).replace(/\s+/g, "");
+          const needle = `${street}${number}`;
+          const index = value.indexOf(needle);
+          return index >= 0 && !/[\d-]/.test(value[index + needle.length] || "");
+        }));
+        place = options[matches.indexOf(true)] || place;
+      }
       const selectedText = (await place.innerText()).replace(/\s+/g, " ").trim();
       await place.click();
       return selectedText;
     } catch (error) {
       if (query === queries[queries.length - 1]) {
-        console.error(`Naver address suggestion lookup failed for ${position}: ${query}`);
-        throw new Error(`Naver Maps found no selectable place for: ${address}`);
+        const title = await page.title().catch(() => "unknown");
+        console.error(`Naver suggestion lookup failed for ${position}: ${query}; title=${title}; url=${page.url()}; error=${error.message.split("\n")[0]}`);
+        throw new Error(`Naver Maps found no place suggestion for ${position}: ${address}`);
       }
     }
   }
