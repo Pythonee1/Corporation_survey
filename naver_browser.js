@@ -19,7 +19,9 @@ async function selectAddress(page, position, address) {
   const queries = [...new Set([address, clean, road].filter(Boolean))];
   for (const query of queries) {
     await container.locator("input.input_search").fill(query);
-    const place = container.locator("[id^='instant-search-item-']").first();
+    const place = container.locator(position === "start"
+      ? "[id^='instant-search-item-poi-']"
+      : "[id^='instant-search-item-poi-'], [id^='instant-search-item-address-']").first();
     try {
       await place.waitFor({ state: "visible", timeout: 7000 });
       const selectedText = (await place.innerText()).replace(/\s+/g, " ").trim();
@@ -65,7 +67,7 @@ async function runRoute(page, destination, startAddress) {
       waitUntil: "domcontentloaded",
       timeout: 25000,
     });
-    await selectAddress(page, "start", startAddress);
+    const selectedStart = await selectAddress(page, "start", startAddress);
     const selectedGoal = await selectAddress(page, "goal", destination);
     const card = page.locator("[class*=StyledPubtransDirectionsSummaryItem]").first();
     await card.waitFor({ state: "hidden", timeout: 5000 });
@@ -78,8 +80,7 @@ async function runRoute(page, destination, startAddress) {
           .then(() => { throw new Error("Naver Maps could not load the public-transit route"); }),
       ]);
     } catch (error) {
-      const goalValue = await page.locator(".search_input_box_wrap.goal input.input_search").inputValue().catch(() => "");
-      throw new Error(`${error.message}; selected destination: ${selectedGoal}; form: ${goalValue}`);
+      throw new Error(`Naver could not load a public-transit route from ${selectedStart} to ${selectedGoal}: ${error.message.split("\n")[0]}`);
     }
 
     const details = await card.evaluate((root, destinationAddress) => {

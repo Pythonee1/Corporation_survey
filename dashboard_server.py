@@ -446,7 +446,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--api-key", default=os.getenv("OPENDART_API_KEY"))
     parser.add_argument("--corporations", default="temp/corporations.txt")
-    parser.add_argument("--port", type=int, default=8000)
+    default_port = int(os.getenv("PORT", "8000"))
+    default_host = os.getenv("HOST") or ("0.0.0.0" if os.getenv("PORT") else "127.0.0.1")
+    parser.add_argument("--host", default=default_host)
+    parser.add_argument("--port", type=int, default=default_port)
     args = parser.parse_args()
     if not args.api_key:
         parser.error("--api-key or OPENDART_API_KEY is required")
@@ -456,8 +459,9 @@ def main():
     Handler.corporations = load_corporations(corp_path)
     Handler.api_key = args.api_key
     print(f"Loaded {len(Handler.corporations):,} corporations")
-    print(f"Open http://127.0.0.1:{args.port} in your browser")
-    DashboardServer(("127.0.0.1", args.port), Handler).serve_forever()
+    display_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host
+    print(f"Open http://{display_host}:{args.port} in your browser")
+    DashboardServer((args.host, args.port), Handler).serve_forever()
 
 
 if __name__ == "__main__":
