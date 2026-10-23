@@ -18,9 +18,11 @@ async function selectAddress(page, position, address) {
   const queries = [...new Set([address, clean, road].filter(Boolean))];
   for (const query of queries) {
     await container.locator("input.input_search").fill(query);
-    const place = container.locator(position === "start"
-      ? "[id^='instant-search-item-poi-']"
-      : "[id^='instant-search-item-poi-'], [id^='instant-search-item-address-']").first();
+    // Starting points are often road addresses rather than named POIs.
+    // Accept both suggestion types for either endpoint.
+    const place = container.locator(
+      "[id^='instant-search-item-poi-'], [id^='instant-search-item-address-']"
+    ).first();
     try {
       await place.waitFor({ state: "visible", timeout: 7000 });
       const selectedText = (await place.innerText()).replace(/\s+/g, " ").trim();
