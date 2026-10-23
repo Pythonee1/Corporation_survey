@@ -307,7 +307,11 @@ async function main() {
       }));
       emit({ type: "error", error: "Naver Maps browser timed out" });
       process.exit(1);
-    }, 75000);
+    }, 150000);
+    // Keep the HTTP stream active while Chromium loads and renders the route.
+    const progress = setInterval(() => {
+      emit({ type: "progress", stage: trace?.stage || "new-page" });
+    }, 10000);
     try {
       // A new tab starts without the previous request's visible result card.
       // The persistent context still shares its Naver login and cache.
@@ -321,6 +325,7 @@ async function main() {
     } finally {
       if (page && !page.isClosed()) await page.close().catch(() => {});
       clearTimeout(watchdog);
+      clearInterval(progress);
       emit({ type: "complete" });
     }
   }
