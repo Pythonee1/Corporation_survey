@@ -91,6 +91,8 @@ async function logFailure(page, trace, error) {
     attempts: trace?.attempts || [],
     network: trace?.network || [],
     dom,
+    placeLocators: await page.locator("[id^='instant-search-item-poi-'], [id^='instant-search-item-address-']").count().catch(() => null),
+    visiblePlaceLocators: await page.locator("[id^='instant-search-item-poi-']:visible, [id^='instant-search-item-address-']:visible").count().catch(() => null),
   }));
 }
 
@@ -105,12 +107,10 @@ async function selectAddress(page, position, address, trace) {
     await container.locator("input.input_search").fill(query);
     // The `ac` row runs a general map search; only POI/address rows set a
     // directions endpoint. The first POI may be a different street number.
-    const places = page.locator(
-      "[id^='instant-search-item-poi-']:visible, [id^='instant-search-item-address-']:visible"
-    );
+    const places = page.locator("[id^='instant-search-item-poi-'], [id^='instant-search-item-address-']");
     try {
       trace.stage = `${position}.suggestions`;
-      await places.first().waitFor({ state: "visible", timeout: 10000 });
+      await places.first().waitFor({ state: "attached", timeout: 20000 });
       trace.stage = `${position}.select`;
       const options = await places.all();
       let place = options[0];
@@ -125,7 +125,15 @@ async function selectAddress(page, position, address, trace) {
         place = options[matches.indexOf(true)] || place;
       }
       const selectedText = (await place.innerText()).replace(/\s+/g, " ").trim();
-      await place.click();
+      // Naver can keep a result in the DOM while its popover is not considered
+      // visible by Playwright. Its own click handler still selects the endpoint.
+      await place.evaluate((element) => element.click());
+      trace.stage = `${position}.verify`;
+      const segment = position === "start" ? 3 : 4;
+      await page.waitForURL((url) => {
+        const parts = url.pathname.split("/");
+        return parts[1] === "p" && parts[2] === "directions" && Boolean(parts[segment]) && parts[segment] !== "-";
+      }, { timeout: 10000 });
       return selectedText;
     } catch (error) {
       trace.attempts.push({ position, query, error: error.message.split("\n")[0] });
