@@ -62,9 +62,10 @@ python .\dashboard_server.py
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Type a company name such as `삼성`, select a suggestion, and click **Search** or press Enter. The dashboard keeps the API key in the Python backend and shows annual and quarterly charts in the browser.
 
-The dashboard's public-transit route starts at `START_ADDRESS` in
-`naver_route.py` and ends at the selected company address. Change that one
-constant to change both the dashboard and CLI defaults.
+The dashboard asks for a starting point and leaves it blank on a first visit.
+After you enter one, it is remembered in the browser for future visits. The
+CLI route commands still use `START_ADDRESS` in `naver_route.py` as their
+default and can override it with `--start`.
 
 To enable Naver Maps API features, create Naver Maps API credentials and set:
 

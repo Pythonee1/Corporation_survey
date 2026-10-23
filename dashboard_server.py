@@ -22,7 +22,6 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from dotenv import load_dotenv
-from naver_route import START_ADDRESS
 
 load_dotenv()
 
@@ -332,6 +331,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/heathz":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"OK")
+            return
         if parsed.path in {"/", "/index.html", "/employees"}:
             body = (ROOT / ("employees.html" if parsed.path == "/employees" else "dashboard.html")).read_bytes()
             self.send_response(200)
@@ -372,9 +378,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/route-stream":
             global ROUTE_WORKER, ROUTE_WORKER_MTIME
-            address = parse_qs(parsed.query).get("address", [""])[0].strip()
+            params = parse_qs(parsed.query)
+            address = params.get("address", [""])[0].strip()
+            start_address = params.get("start_address", [""])[0].strip()
             if not address:
                 self.send_json({"error": "Destination address is required"}, 400)
+                return
+            if not start_address:
+                self.send_json({"error": "Starting address is required"}, 400)
                 return
             node = os.getenv("NAVER_NODE_PATH") or shutil.which("node") or ""
             playwright_candidates = [
@@ -410,7 +421,7 @@ class Handler(BaseHTTPRequestHandler):
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                         )
                         ROUTE_WORKER_MTIME = script_mtime
-                    ROUTE_WORKER.stdin.write((json.dumps({"address": address, "start_address": START_ADDRESS}, ensure_ascii=False) + "\n").encode("utf-8"))
+                    ROUTE_WORKER.stdin.write((json.dumps({"address": address, "start_address": start_address}, ensure_ascii=False) + "\n").encode("utf-8"))
                     ROUTE_WORKER.stdin.flush()
                 except Exception as exc:
                     self.send_json({"error": str(exc)}, 503)

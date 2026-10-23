@@ -14,6 +14,8 @@
     .theme-toggle { padding:9px 13px; border:1px solid var(--line); background:var(--card); color:var(--ink); font-size:14px; }
     .search { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; box-shadow:0 8px 24px #1d4ed80d; }
     .search-row { display:flex; gap:10px; } input { flex:1; min-width:0; padding:13px 14px; border:1px solid #cbd5e1; border-radius:10px; font-size:16px; }
+    .start-point { display:flex; align-items:center; gap:10px; margin-top:12px; color:var(--muted); font-size:14px; }
+    .start-point label { white-space:nowrap; }
     button { padding:0 22px; border:0; border-radius:10px; background:var(--blue); color:white; font-size:16px; cursor:pointer; } button:disabled { opacity:.55; cursor:wait; }
     .suggestions { margin:8px 0 0; padding:0; list-style:none; max-height:230px; overflow:auto; border-radius:10px; }
     .suggestions li { padding:10px 12px; border-bottom:1px solid var(--line); background:var(--card); cursor:pointer; } .suggestions li:hover { background:#eff6ff; }
@@ -55,6 +57,7 @@
   </div><button id="themeToggle" class="theme-toggle" type="button">🌙 Dark</button></div>
   <section class="search">
     <div class="search-row"><input id="companyInput" autocomplete="off" placeholder="Search company name, e.g. 삼성"><button id="searchButton">Search</button></div>
+    <div class="start-point"><label for="startAddress">Starting point</label><input id="startAddress" autocomplete="street-address" placeholder="Enter your starting point"></div>
     <ul id="suggestions" class="suggestions"></ul>
     <div id="selected" class="selected">No company selected</div>
   </section>
@@ -94,10 +97,13 @@
   </section>
 </main>
 <script>
-  const input = document.querySelector('#companyInput'), suggestions = document.querySelector('#suggestions'), selected = document.querySelector('#selected');
+  const input = document.querySelector('#companyInput'), startAddressInput = document.querySelector('#startAddress'), suggestions = document.querySelector('#suggestions'), selected = document.querySelector('#selected');
   const statusEl = document.querySelector('#status'), results = document.querySelector('#results'), button = document.querySelector('#searchButton');
   let selectedCompany = null, annualChart, quarterlyChart, suggestionIndex = -1, lastCompanyData = null;
   const returnKey='corporation-survey-return';
+  const startAddressKey='corporation-survey-start-address';
+  try { startAddressInput.value=localStorage.getItem(startAddressKey)||''; } catch {}
+  startAddressInput.addEventListener('input', () => { try { const value=startAddressInput.value.trim(); if(value)localStorage.setItem(startAddressKey,value); else localStorage.removeItem(startAddressKey); } catch {} });
   const dark = localStorage.getItem('corporation-survey-theme') === 'dark';
   if (dark) document.body.classList.add('dark');
   const themeToggle = document.querySelector('#themeToggle');
@@ -186,14 +192,14 @@
     if(data.annual_estimate)note.textContent=`${data.annual_estimate.year} estimate based on Q${data.annual_estimate.through_quarter} year-to-date results · 30% transparent`;
   }
   let routeRequestId = 0;
-  async function streamNaverRoute(address, requestId) {
+  async function streamNaverRoute(address, startAddress, requestId) {
     const routeSummary=document.querySelector('#routeSummary'), routeSteps=document.querySelector('#routeSteps');
     const routeDestination=document.querySelector('#routeDestination'), routeNote=document.querySelector('#routeNote');
     const routeLink=document.querySelector('#routeLink'), routeFullLink=document.querySelector('#routeFullLink');
     const routeScreenshot=document.querySelector('#routeScreenshot'), routeScreenshotWrap=document.querySelector('#routeScreenshotWrap');
     let receivedRoute=false;
     try {
-      const response=await fetch('/api/route-stream?address='+encodeURIComponent(address));
+      const response=await fetch('/api/route-stream?address='+encodeURIComponent(address)+'&start_address='+encodeURIComponent(startAddress));
       if(!response.ok){const error=await response.json();throw Error(error.error||'Route unavailable');}
       const reader=response.body.getReader(), decoder=new TextDecoder();
       let pending='';
@@ -237,9 +243,12 @@
       const c=data.company, latest=data.annual.at(-1)||{}, employment=data.employment_summary||fallbackEmploymentSummary(data.employment||[]);
       document.querySelector('#companyMeta').textContent=`${c.corp_name||selectedCompany.corp_name} · ${c.stock_code||'unlisted'} · ${c.adres||'Address unavailable'}${c.hm_url ? ` · ${c.hm_url}` : ''}`;
       const routeLink=document.querySelector('#routeLink'); const routeNote=document.querySelector('#routeNote'); const routePanel=document.querySelector('#routePanel'); const routeFullLink=document.querySelector('#routeFullLink'); const routeSummary=document.querySelector('#routeSummary'); const routeSteps=document.querySelector('#routeSteps'); const routeDestination=document.querySelector('#routeDestination'); const routeScreenshotWrap=document.querySelector('#routeScreenshotWrap'); const routeScreenshot=document.querySelector('#routeScreenshot'); routeLink.hidden=true; routeNote.hidden=true; routePanel.hidden=true; routeFullLink.hidden=true; routeFullLink.removeAttribute('href'); routeSummary.textContent=''; routeSteps.replaceChildren(); routeDestination.textContent=''; routeScreenshotWrap.hidden=true; routeScreenshot.removeAttribute('src');
-      if (c.adres) {
+      const startAddress=startAddressInput.value.trim();
+      if (c.adres && startAddress) {
         routePanel.hidden=false; routeSummary.textContent='Loading Naver Maps public-transit route…'; routeNote.textContent='Searching the route in Naver Maps…'; routeNote.hidden=false;
-        streamNaverRoute(c.adres,requestId);
+        streamNaverRoute(c.adres,startAddress,requestId);
+      } else if (c.adres) {
+        routePanel.hidden=false; routeSummary.textContent='Starting point required'; routeNote.textContent='Enter a starting point above to load the public-transit route.'; routeNote.hidden=false;
       } else {
         routePanel.hidden=false; routeSummary.textContent='Route unavailable'; routeNote.textContent='This company does not have a usable address.'; routeNote.hidden=false;
       }
