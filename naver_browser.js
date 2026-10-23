@@ -11,13 +11,97 @@ function emit(payload) {
   process.stdout.write(JSON.stringify(payload) + "\n");
 }
 
-async function selectAddress(page, position, address) {
+function safeUrl(raw) {
+  try {
+    const url = new URL(raw);
+    return `${url.origin}${url.pathname}`.slice(0, 180);
+  } catch {
+    return "unavailable";
+  }
+}
+
+function responseShape(value, depth = 0) {
+  if (Array.isArray(value)) return { count: value.length };
+  if (value && typeof value === "object" && depth < 3) {
+    return Object.fromEntries(Object.entries(value).slice(0, 12).map(([key, child]) => [
+      key,
+      responseShape(child, depth + 1),
+    ]));
+  }
+  return typeof value;
+}
+
+function tracePage(page) {
+  const trace = { stage: "new-page", started: Date.now(), network: [], attempts: [] };
+  const record = (entry) => {
+    trace.network.push(entry);
+    if (trace.network.length > 30) trace.network.shift();
+  };
+  page.on("requestfailed", (request) => {
+    if (!["document", "script", "xhr", "fetch"].includes(request.resourceType())) return;
+    record({ kind: "failed", type: request.resourceType(), url: safeUrl(request.url()), reason: request.failure()?.slice(0, 120) });
+  });
+  page.on("response", (response) => {
+    const request = response.request();
+    if (!["xhr", "fetch"].includes(request.resourceType())) return;
+    let url;
+    try {
+      url = new URL(response.url());
+      if (url.hostname.endsWith("pstatic.net") && response.status() < 400) return;
+    } catch { /* Keep malformed URLs in the trace. */ }
+    const entry = { kind: "response", status: response.status(), url: safeUrl(response.url()) };
+    record(entry);
+    if (url?.pathname === "/p/api/search/instant-search") {
+      response.json().then((body) => { entry.shape = responseShape(body); })
+        .catch((error) => { entry.bodyError = error.message.split("\n")[0]; });
+    }
+  });
+  page.on("pageerror", (error) => {
+    record({ kind: "page-error", message: error.message.slice(0, 180) });
+  });
+  return trace;
+}
+
+async function logFailure(page, trace, error) {
+  let dom;
+  try {
+    dom = await page.evaluate(() => {
+      const start = document.querySelector(".search_input_box_wrap.start");
+      const goal = document.querySelector(".search_input_box_wrap.goal");
+      const suggestions = [...document.querySelectorAll("[id^='instant-search-item-']")];
+      return {
+        title: document.title,
+        startContainer: Boolean(start),
+        goalContainer: Boolean(goal),
+        startInput: Boolean(start?.querySelector("input.input_search")),
+        suggestionCount: suggestions.length,
+        placeCount: suggestions.filter((item) => /instant-search-item-(poi|address)-/.test(item.id)).length,
+        suggestions: suggestions.slice(0, 6).map((item) => ({ id: item.id, text: item.innerText.replace(/\s+/g, " ").slice(0, 100) })),
+        bodyExcerpt: document.body?.innerText.replace(/\s+/g, " ").slice(0, 500) || "",
+      };
+    });
+  } catch (snapshotError) {
+    dom = { snapshotError: snapshotError.message.split("\n")[0] };
+  }
+  console.error("NAVER_DIAGNOSTIC " + JSON.stringify({
+    stage: trace?.stage || "browser-launch",
+    elapsedMs: trace ? Date.now() - trace.started : null,
+    error: error.message.split("\n")[0],
+    pageUrl: safeUrl(page.url()),
+    attempts: trace?.attempts || [],
+    network: trace?.network || [],
+    dom,
+  }));
+}
+
+async function selectAddress(page, position, address, trace) {
   const container = page.locator(`.search_input_box_wrap.${position}`);
   const clean = address.replace(/\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
   const road = clean.match(/^(.+?(?:로\d*길|로|길)\s*\d+(?:-\d+)?)(?:\s|$)/)?.[1];
   const queries = [...new Set([address, clean, road].filter(Boolean))];
   const exactAddress = clean.match(/([^\s]+(?:로\d*길|로|길|동))\s*(\d+(?:-\d+)?)(?:\s|$)/);
   for (const query of queries) {
+    trace.stage = `${position}.fill`;
     await container.locator("input.input_search").fill(query);
     // The `ac` row runs a general map search; only POI/address rows set a
     // directions endpoint. The first POI may be a different street number.
@@ -25,7 +109,9 @@ async function selectAddress(page, position, address) {
       "[id^='instant-search-item-poi-'], [id^='instant-search-item-address-']"
     );
     try {
+      trace.stage = `${position}.suggestions`;
       await places.first().waitFor({ state: "visible", timeout: 10000 });
+      trace.stage = `${position}.select`;
       const options = await places.all();
       let place = options[0];
       if (exactAddress) {
@@ -42,10 +128,9 @@ async function selectAddress(page, position, address) {
       await place.click();
       return selectedText;
     } catch (error) {
+      trace.attempts.push({ position, query, error: error.message.split("\n")[0] });
       if (query === queries[queries.length - 1]) {
-        const title = await page.title().catch(() => "unknown");
-        console.error(`Naver suggestion lookup failed for ${position}: ${query}; title=${title}; url=${page.url()}; error=${error.message.split("\n")[0]}`);
-        throw new Error(`Naver Maps found no place suggestion for ${position}: ${address}`);
+        throw new Error(`Naver Maps found no selectable place for ${position}: ${address}`);
       }
     }
   }
@@ -75,21 +160,25 @@ async function waitForMap(page, mapClip) {
   throw new Error("Naver route loaded, but the map did not finish rendering");
 }
 
-async function runRoute(page, destination, startAddress) {
+async function runRoute(page, destination, startAddress, trace) {
     if (!destination) throw new Error("Destination address is required");
     if (!startAddress) throw new Error("Starting address is required");
     page.setDefaultTimeout(12000);
+    trace.stage = "directions.load";
     await page.goto("https://map.naver.com/p/directions/-/-/-/transit", {
       waitUntil: "domcontentloaded",
       timeout: 25000,
     });
-    const selectedStart = await selectAddress(page, "start", startAddress);
-    const selectedGoal = await selectAddress(page, "goal", destination);
+    const selectedStart = await selectAddress(page, "start", startAddress, trace);
+    const selectedGoal = await selectAddress(page, "goal", destination, trace);
     const card = page.locator("[class*=StyledPubtransDirectionsSummaryItem]").first();
+    trace.stage = "route.prepare";
     await card.waitFor({ state: "hidden", timeout: 5000 });
+    trace.stage = "route.click";
     await page.getByRole("button", { name: "길찾기", exact: true }).click();
 
     try {
+      trace.stage = "route.results";
       await Promise.race([
         card.waitFor({ state: "visible", timeout: 25000 }),
         page.locator("[class*=StyledDirectionsError]").first().waitFor({ state: "visible", timeout: 25000 })
@@ -99,6 +188,7 @@ async function runRoute(page, destination, startAddress) {
       throw new Error(`Naver could not load a public-transit route from ${selectedStart} to ${selectedGoal}: ${error.message.split("\n")[0]}`);
     }
 
+    trace.stage = "route.extract";
     const details = await card.evaluate((root, destinationAddress) => {
       const clean = (value) => (value || "").trim().replace(/\s+/g, " ");
       const duration = (value) => clean(value).replace(/(\d+)\s*시간/g, "$1hr ").replace(/(\d+)\s*분/g, "$1min").replace(/\s+/g, " ").trim();
@@ -165,7 +255,9 @@ async function runRoute(page, destination, startAddress) {
       width: Math.max(100, right - Math.ceil(directionsForm.x + directionsForm.width + 20)),
       height: viewport.height - top,
     };
+    trace.stage = "map.render";
     await waitForMap(page, mapClip);
+    trace.stage = "map.capture";
     const png = await page.screenshot({ type: "png", clip, timeout: 15000 });
     emit({ type: "screenshot", screenshot_data: png.toString("base64") });
 }
@@ -194,17 +286,29 @@ async function main() {
   for await (const line of input) {
     let request;
     try { request = JSON.parse(line); } catch { emit({ type: "error", error: "Invalid route request" }); emit({ type: "complete" }); continue; }
+    let page;
+    let trace;
     const watchdog = setTimeout(() => {
+      console.error("NAVER_DIAGNOSTIC " + JSON.stringify({
+        stage: trace?.stage || "new-page",
+        elapsedMs: trace ? Date.now() - trace.started : null,
+        error: "watchdog timeout",
+        pageUrl: page && !page.isClosed() ? safeUrl(page.url()) : null,
+        attempts: trace?.attempts || [],
+        network: trace?.network || [],
+      }));
       emit({ type: "error", error: "Naver Maps browser timed out" });
       process.exit(1);
     }, 75000);
-    let page;
     try {
       // A new tab starts without the previous request's visible result card.
       // The persistent context still shares its Naver login and cache.
       page = await context.newPage();
-      await runRoute(page, request.address, request.start_address);
+      trace = tracePage(page);
+      await runRoute(page, request.address, request.start_address, trace);
     } catch (error) {
+      if (page && !page.isClosed()) await logFailure(page, trace, error);
+      else console.error("NAVER_DIAGNOSTIC " + JSON.stringify({ stage: trace?.stage || "new-page", error: error.message.split("\n")[0] }));
       emit({ type: "error", error: error.message });
     } finally {
       if (page && !page.isClosed()) await page.close().catch(() => {});
@@ -216,6 +320,7 @@ async function main() {
 }
 
 main().catch((error) => {
+  console.error("NAVER_DIAGNOSTIC " + JSON.stringify({ stage: "browser-launch", error: error.message.split("\n")[0] }));
   emit({ type: "error", error: error.message });
   process.exitCode = 1;
 });
