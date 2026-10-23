@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: corporation-survey
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /
+    envVars:
+      - key: OPENDART_API_KEY
+        sync: false

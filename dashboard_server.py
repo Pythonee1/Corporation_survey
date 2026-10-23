@@ -11,6 +11,7 @@ import re
 import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import zipfile
 from datetime import date, timedelta
@@ -375,20 +376,20 @@ class Handler(BaseHTTPRequestHandler):
             if not address:
                 self.send_json({"error": "Destination address is required"}, 400)
                 return
-            bundle = Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node"
-            node = os.getenv("NAVER_NODE_PATH") or str(bundle / "bin/node.exe")
-            if not Path(node).is_file():
-                node = shutil.which("node") or ""
-            playwright = os.getenv("NAVER_PLAYWRIGHT_MODULE") or next(
-                (str(path) for path in (bundle / "node_modules/playwright", ROOT / "node_modules/playwright") if path.exists()),
-                "",
-            )
+            node = os.getenv("NAVER_NODE_PATH") or shutil.which("node") or ""
+            playwright_candidates = [
+                os.getenv("NAVER_PLAYWRIGHT_MODULE", ""),
+                str(ROOT / "node_modules/playwright"),
+            ]
+            playwright = next((path for path in playwright_candidates if path and Path(path).exists()), "")
             if not node or not Path(playwright).exists():
-                self.send_json({"error": "Node.js and Playwright are required for Naver Maps browser automation"}, 503)
+                self.send_json({
+                    "error": "Route service is unavailable: Node.js and Playwright are not installed on this instance"
+                }, 503)
                 return
             env = os.environ.copy()
             env["NAVER_PLAYWRIGHT_MODULE"] = playwright
-            profile = Path(os.getenv("NAVER_PROFILE_PATH") or ROOT / "temp/naver-browser-profile")
+            profile = Path(os.getenv("NAVER_PROFILE_PATH") or tempfile.gettempdir()) / f"corporation-survey-naver-{os.getpid()}"
             profile.mkdir(parents=True, exist_ok=True)
             env["NAVER_PROFILE_PATH"] = str(profile)
             with ROUTE_LOCK:
@@ -436,7 +437,9 @@ class Handler(BaseHTTPRequestHandler):
                         except (BrokenPipeError, ConnectionResetError):
                             client_open = False
                 if not received and client_open:
-                    self.wfile.write(b'{"type":"error","error":"Naver Maps browser exited without a route"}\n')
+                    self.wfile.write(
+                        b'{"type":"error","error":"Naver Maps browser exited before returning a route; check Playwright/Chromium installation"}\n'
+                    )
                     self.wfile.flush()
             return
         self.send_error(404)

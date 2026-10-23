@@ -100,19 +100,21 @@ python .\naver_route.py "서울특별시 중구 세종대로 67" --start "서울
 To generate the Naver Maps public-transit app URL used by the dashboard, add
 `--public-transit-url`.
 
-The dashboard opens Naver Maps in headless Microsoft Edge with a dedicated
-profile saved in `temp/naver-browser-profile/`. It reuses that profile's login,
-cache, and browser for later searches, including after restarting the server.
-Your regular Edge login is not copied. To sign in or refresh an expired login,
-set `NAVER_HEADLESS=0` before starting the dashboard server, sign in in the
-visible browser, then restart the server without that setting.
+The dashboard opens Naver Maps in headless Chromium with a per-process profile.
+On Render, the included Docker image installs Node.js, Playwright, and
+Playwright's bundled Chromium automatically. A custom browser executable is
+optional via `NAVER_EDGE_PATH`; do not use a Windows Edge path on Render.
 Naver Maps resolves the start and destination inside its own directions form,
 so the dashboard does not make separate Maps Geocoding API requests. It sends
 the first public-transit route to the left panel, then takes a screenshot of
 that same page for the right panel. Edge and Node.js with
-Playwright are required. This machine's bundled Codex runtime is used by
-default; alternatively set `NAVER_NODE_PATH`, `NAVER_PLAYWRIGHT_MODULE`, and
-`NAVER_EDGE_PATH` for custom installations.
+Playwright are required. The included `Dockerfile` and `render.yaml` provide
+the Render runtime. Deploy the service with the Docker runtime and set
+`OPENDART_API_KEY` in Render's environment settings.
+
+For a local non-Docker run, install Node.js and Playwright, then run
+`npm install` and `npx playwright install chromium` before starting the
+Python server.
 
 Or pass the key directly:
 

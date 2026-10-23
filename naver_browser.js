@@ -1,11 +1,10 @@
 "use strict";
 
-// One headless Edge profile stays open between searches and retains Naver login.
+// One headless Chromium profile stays open between searches for this process.
 // Emit route details first, then a screenshot from that same page.
 const { chromium } = require(process.env.NAVER_PLAYWRIGHT_MODULE || "playwright");
 const readline = require("readline");
 
-const edgePath = process.env.NAVER_EDGE_PATH || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
 const profilePath = process.env.NAVER_PROFILE_PATH;
 
 function emit(payload) {
@@ -156,13 +155,22 @@ async function runRoute(page, destination, startAddress) {
 
 async function main() {
   if (!profilePath) throw new Error("NAVER_PROFILE_PATH is required");
-  const context = await chromium.launchPersistentContext(profilePath, {
+  const launchOptions = {
     headless: process.env.NAVER_HEADLESS !== "0",
-    executablePath: edgePath,
     locale: "ko-KR",
     viewport: { width: 1560, height: 1100 },
-    args: ["--no-first-run", "--no-default-browser-check"],
-  });
+    args: [
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+    ],
+  };
+  // On Render, Playwright supplies Chromium. A custom executable is optional
+  // for local Edge/Chrome installations and must never default to a Windows path.
+  if (process.env.NAVER_EDGE_PATH) launchOptions.executablePath = process.env.NAVER_EDGE_PATH;
+  const context = await chromium.launchPersistentContext(profilePath, launchOptions);
   if (!context.pages().length) await context.newPage();
   emit({ type: "ready" });
   const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });

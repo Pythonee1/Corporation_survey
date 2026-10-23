@@ -1,5 +1,7 @@
 .env
 *.json
+!package.json
+!package-lock.json
 *.zip
 *.csv
 *.xlsx
