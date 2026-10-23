@@ -7,8 +7,8 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
   <style>
     :root { --ink:#172033; --muted:#6b7280; --blue:#2563eb; --line:#e5e7eb; --card:#fff; --bg:#f5f7fb; }
-    body.dark { --ink:#e5e7eb; --muted:#9ca3af; --blue:#60a5fa; --line:#374151; --card:#1f2937; --bg:#111827; }
-    * { box-sizing:border-box; } body { margin:0; color:var(--ink); background:var(--bg); font-family:Inter,Segoe UI,Arial,sans-serif; transition:background .2s,color .2s; }
+    body.dark { --ink:#f5f5f5; --muted:#aaa; --blue:#82b6ff; --line:#353535; --card:#141414; --bg:#000; }
+    * { box-sizing:border-box; } [hidden] { display:none !important; } body { margin:0; color:var(--ink); background:var(--bg); font-family:Inter,Segoe UI,Arial,sans-serif; transition:background .2s,color .2s; }
     .wrap { max-width:1180px; margin:0 auto; padding:34px 22px 60px; }
     .title-row { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; } h1 { margin:0 0 6px; font-size:32px; } .subtitle { color:var(--muted); margin-bottom:26px; }
     .theme-toggle { padding:9px 13px; border:1px solid var(--line); background:var(--card); color:var(--ink); font-size:14px; }
@@ -21,7 +21,12 @@
     .selected { margin-top:10px; color:var(--muted); font-size:14px; } .status { min-height:24px; margin:16px 0; color:var(--muted); }
     .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; } .card, .panel { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; }
     .label { color:var(--muted); font-size:13px; } .value { margin-top:7px; font-size:24px; font-weight:700; } .unit { color:var(--muted); font-size:12px; }
-    .panel { margin-top:18px; } .panel h2 { font-size:18px; margin:0 0 14px; } .chart-box { height:330px; position:relative; }
+    .card-link { display:block; color:inherit; text-decoration:none; cursor:pointer; } .card-link:hover, .card-link:focus-visible { border-color:var(--blue); outline:2px solid var(--blue); outline-offset:2px; }
+    .panel { margin-top:18px; } .panel h2 { font-size:18px; margin:0 0 14px; } .chart-box { height:420px; position:relative; }
+    .chart-panel { background:#fff; border-color:var(--line); color:#000; }
+    .chart-note { margin:8px 0 0; color:#555; font-size:12px; }
+    body.dark .chart-panel { background:#000; border-color:#3b3838; color:#fff; }
+    body.dark .chart-note { color:#d9d9d9; }
     .company-meta { display:flex; gap:22px; flex-wrap:wrap; color:var(--muted); font-size:14px; margin:8px 0 10px; }
     .route-link { display:inline-block; margin-bottom:6px; padding:9px 13px; background:#16a34a; color:#fff; border-radius:9px; text-decoration:none; font-size:14px; }
     .route-note { margin:0 0 18px; color:var(--muted); font-size:12px; }
@@ -36,6 +41,10 @@
     .route-destination { padding:0 14px 16px; color:var(--ink); font-size:16px; }
     .route-screenshot-wrap { min-height:360px; border-left:1px solid var(--line); background:#eef0f3; display:flex; align-items:flex-start; justify-content:center; }
     .route-screenshot { display:block; width:100%; height:auto; max-height:650px; object-fit:contain; }
+    body.dark input { background:#1c1c1c; color:var(--ink); border-color:var(--line); }
+    body.dark .search { box-shadow:none; }
+    body.dark .suggestions li:hover, body.dark .suggestions li.active { background:#292929; }
+    body.dark .route-screenshot-wrap { background:#080808; }
     @media (max-width:800px) { .grid { grid-template-columns:repeat(2,1fr); } .search-row { flex-direction:column; } button { padding:12px; } .route-panel-body { grid-template-columns:1fr; } .route-screenshot-wrap { border-left:0; border-top:1px solid var(--line); } }
   </style>
 </head>
@@ -72,7 +81,7 @@
     </section>
     <div class="grid">
       <div class="card"><div class="label">Employees</div><div id="employees" class="value">—</div><div class="unit">latest annual report</div></div>
-      <div class="card"><div class="label">Average payroll</div><div id="payroll" class="value">—</div><div class="unit">KRW, latest annual report</div></div>
+      <a id="payrollLink" class="card card-link" href="#"><div class="label">Average payroll ↗</div><div id="payroll" class="value">—</div><div id="payrollUnit" class="unit">만원, latest annual report</div></a>
       <div class="card"><div class="label">Assets</div><div id="assets" class="value">—</div><div class="unit">KRW million</div></div>
       <div class="card"><div class="label">Revenue</div><div id="revenue" class="value">—</div><div class="unit">KRW million</div></div>
       <div class="card"><div class="label">Operating income</div><div id="operating_income" class="value">—</div><div class="unit">KRW million</div></div>
@@ -80,44 +89,101 @@
       <div class="card"><div class="label">Debt / liabilities</div><div id="liabilities" class="value">—</div><div class="unit">KRW million</div></div>
       <div class="card"><div class="label">Net income</div><div id="net_income" class="value">—</div><div class="unit">KRW million</div></div>
     </div>
-    <div class="panel"><h2>Five-year annual trend</h2><div class="chart-box"><canvas id="annualChart"></canvas></div></div>
-    <div class="panel"><h2>Past-year quarterly financial trend</h2><div class="chart-box"><canvas id="quarterlyChart"></canvas></div></div>
+    <div class="panel chart-panel"><h2>Five-year annual trend</h2><div class="chart-box"><canvas id="annualChart"></canvas></div><p id="annualEstimateNote" class="chart-note" hidden></p></div>
+    <div class="panel chart-panel"><h2>Past-year quarterly financial trend</h2><div class="chart-box"><canvas id="quarterlyChart"></canvas></div></div>
   </section>
 </main>
 <script>
   const input = document.querySelector('#companyInput'), suggestions = document.querySelector('#suggestions'), selected = document.querySelector('#selected');
   const statusEl = document.querySelector('#status'), results = document.querySelector('#results'), button = document.querySelector('#searchButton');
-  let selectedCompany = null, annualChart, quarterlyChart, suggestionIndex = -1;
+  let selectedCompany = null, annualChart, quarterlyChart, suggestionIndex = -1, lastCompanyData = null;
+  const returnKey='corporation-survey-return';
   const dark = localStorage.getItem('corporation-survey-theme') === 'dark';
   if (dark) document.body.classList.add('dark');
   const themeToggle = document.querySelector('#themeToggle');
   const updateThemeLabel = () => themeToggle.textContent = document.body.classList.contains('dark') ? '☀️ Light' : '🌙 Dark';
   updateThemeLabel();
-  themeToggle.addEventListener('click', () => { document.body.classList.toggle('dark'); localStorage.setItem('corporation-survey-theme', document.body.classList.contains('dark') ? 'dark' : 'light'); updateThemeLabel(); });
+  themeToggle.addEventListener('click', () => { document.body.classList.toggle('dark'); localStorage.setItem('corporation-survey-theme', document.body.classList.contains('dark') ? 'dark' : 'light'); updateThemeLabel(); if(lastCompanyData&&!results.hidden)drawCharts(lastCompanyData); });
   const fmt = (n) => n == null ? '—' : new Intl.NumberFormat('en-US', {maximumFractionDigits:0}).format(n);
-  const searchCompanies = async () => { selectedCompany=null; suggestionIndex=-1; const q=input.value.trim(); if(!q){suggestions.innerHTML=''; return;} const data=await fetch('/api/search?q='+encodeURIComponent(q)).then(r=>r.json()); suggestions.innerHTML=data.map(c=>`<li data-code="${c.corp_code}" data-name="${c.corp_name}">${c.corp_name} <small>${c.corp_code}</small></li>`).join(''); };
+  const searchCompanies = async () => { selectedCompany=null; suggestionIndex=-1; const q=input.value.trim(); if(!q){suggestions.innerHTML=''; return;} const data=await fetch('/api/search?q='+encodeURIComponent(q)).then(r=>r.json()); if(input.value.trim()!==q)return; suggestions.innerHTML=data.map(c=>`<li data-code="${c.corp_code}" data-name="${c.corp_name}">${c.corp_name} <small>${c.corp_code}</small></li>`).join(''); };
   input.addEventListener('input', searchCompanies);
   input.addEventListener('keydown', e => { const items=[...suggestions.querySelectorAll('li')]; if(e.key==='ArrowDown'||e.key==='ArrowUp'){if(!items.length)return; e.preventDefault(); suggestionIndex=(suggestionIndex+(e.key==='ArrowDown'?1:-1)+items.length)%items.length; items.forEach((item,index)=>item.classList.toggle('active',index===suggestionIndex)); items[suggestionIndex].scrollIntoView({block:'nearest'}); return;} if(e.key==='Enter'){e.preventDefault(); if(selectedCompany){loadCompany();} else if(items.length){(items[suggestionIndex>=0?suggestionIndex:0]).click();}} });
   suggestions.addEventListener('click', e => { const li=e.target.closest('li'); if(!li)return; selectedCompany={corp_code:li.dataset.code,corp_name:li.dataset.name}; input.value=selectedCompany.corp_name; selected.textContent=`Selected: ${selectedCompany.corp_name} (${selectedCompany.corp_code})`; suggestions.innerHTML=''; suggestionIndex=-1; input.focus(); });
   button.addEventListener('click', () => { if(selectedCompany) loadCompany(); else statusEl.textContent='Select a company first.'; });
   function setCard(id, value) { document.querySelector('#'+id).textContent=fmt(value); }
   function rowValue(obj, key) { return obj && obj[key] != null ? obj[key] : null; }
+  function fallbackEmploymentSummary(rows) {
+    const numeric=value=>{const text=String(value??'').replaceAll(',','').trim();return text&&text!=='-'&&Number.isFinite(Number(text))?Number(text):null;};
+    const label=value=>String(value??'').replaceAll(' ','');
+    const overall=rows.find(row=>['합계','총계','전체'].includes(label(row.fo_bbm))||['합계','총계','전체'].includes(label(row.sexdstn)));
+    const subtotals=rows.filter(row=>label(row.fo_bbm)==='성별합계');
+    const basis=subtotals.length?subtotals:rows.filter(row=>row!==overall);
+    const counts=basis.map(row=>numeric(row.sm)).filter(value=>value!=null);
+    const weighted=basis.map(row=>[numeric(row.sm),numeric(row.jan_salary_am)]).filter(([count,salary])=>count>0&&salary!=null);
+    const reportedPay=overall?numeric(overall.jan_salary_am):null;
+    return {employees:(overall?numeric(overall.sm):null)??(counts.length?counts.reduce((a,b)=>a+b,0):null),
+      average_payroll:reportedPay??(weighted.length?Math.round(weighted.reduce((sum,[count,salary])=>sum+count*salary,0)/weighted.reduce((sum,[count])=>sum+count,0)):null),
+      payroll_estimated:reportedPay==null&&weighted.length>0};
+  }
   function drawCharts(data) {
     annualChart?.destroy(); quarterlyChart?.destroy();
+    const darkCharts=document.body.classList.contains('dark');
+    const chartInk=darkCharts?'#fff':'#000', chartGrid=darkCharts?'#3B3838':'#D9D9D9';
     const periodLabel = p => String(p).replace(/^20/, "'");
-    const common = {responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{labels:{color:getComputedStyle(document.body).getPropertyValue('--ink')}}},scales:{y:{beginAtZero:false,title:{display:true,text:'KRW million'},ticks:{callback:v=>fmt(v)}},y1:{position:'right',grid:{drawOnChartArea:false},title:{display:true,text:'Operating income %'},ticks:{callback:v=>v+'%'}}}};
-    annualChart = new Chart(document.querySelector('#annualChart'), {type:'bar', data:{labels:data.annual.map(x=>x.year), datasets:[
-      {type:'bar',label:'Revenue',data:data.annual.map(x=>x.revenue),backgroundColor:'#2563eb'},
-      {type:'bar',label:'Operating income',data:data.annual.map(x=>x.operating_income),backgroundColor:'#16a34a'},
-      {type:'bar',label:'Net income',data:data.annual.map(x=>x.net_income),backgroundColor:'#f97316'},
-      {type:'line',label:'Operating income %',data:data.annual.map(x=>x.operating_income_pct),borderColor:'#dc2626',backgroundColor:'#dc2626',yAxisID:'y1',tension:.25}
-    ]}, options:common});
-    quarterlyChart = new Chart(document.querySelector('#quarterlyChart'), {type:'bar', data:{labels:data.quarterly.map(x=>periodLabel(x.period)), datasets:[
-      {type:'bar',label:'Revenue',data:data.quarterly.map(x=>x.revenue),backgroundColor:'#7c3aed'},
-      {type:'bar',label:'Operating income',data:data.quarterly.map(x=>x.operating_income),backgroundColor:'#0891b2'},
-      {type:'bar',label:'Net income',data:data.quarterly.map(x=>x.net_income),backgroundColor:'#f59e0b'},
-      {type:'line',label:'Operating income %',data:data.quarterly.map(x=>x.operating_income_pct),borderColor:'#dc2626',backgroundColor:'#dc2626',yAxisID:'y1',tension:.25}
-    ]}, options:common});
+    const eok=value=>new Intl.NumberFormat('ko-KR',{maximumFractionDigits:1}).format(value/100);
+    const series=[
+      {key:'revenue',label:'Revenue',color:'#2F5597',fade:'rgba(47,85,151,.7)'},
+      {key:'operating_income',label:'Operating Income',color:'#5B9BD5',fade:'rgba(91,155,213,.7)'},
+      {key:'net_income',label:'Net income',color:'#D9D9D9',fade:'rgba(217,217,217,.7)'}
+    ];
+    const valueLabels={id:'pointValues',afterDatasetsDraw(chart){
+      const {ctx,chartArea}=chart;
+      ctx.save();ctx.font='11px Segoe UI, Arial, sans-serif';ctx.textAlign='center';
+      const placed=[];
+      chart.data.datasets.forEach((dataset,datasetIndex)=>{
+        const meta=chart.getDatasetMeta(datasetIndex);
+        meta.data.forEach((element,index)=>{
+          const value=dataset.data[index];if(value==null||!Number.isFinite(Number(value)))return;
+          const isLine=dataset.type==='line', estimated=chart.data.labels[index]?.includes('(E)');
+          const label=isLine?Number(value).toFixed(1)+'%':eok(Number(value))+'억';
+          const desired=element.y+(isLine?-15:datasetIndex===2?14:Number(value)<0?14:-7);
+          const width=ctx.measureText(label).width+6;
+          let y=Math.max(chartArea.top+12,Math.min(chartArea.bottom-4,desired));
+          for(const offset of [0,-16,16,-32,32,-48,48,-64,64]){
+            const candidate=Math.max(chartArea.top+12,Math.min(chartArea.bottom-4,desired+offset));
+            const box={left:element.x-width/2,right:element.x+width/2,top:candidate-11,bottom:candidate+3};
+            if(!placed.some(other=>box.left<other.right&&box.right>other.left&&box.top<other.bottom&&box.bottom>other.top)){
+              y=candidate;placed.push(box);break;
+            }
+          }
+          ctx.fillStyle=estimated?(darkCharts?'rgba(255,255,255,.7)':'rgba(0,0,0,.7)'):chartInk;
+          ctx.strokeStyle=darkCharts?'#000':'#fff';ctx.lineWidth=3;ctx.strokeText(label,element.x,y);
+          ctx.fillText(label,element.x,y);
+        });
+      });
+      ctx.restore();
+    }};
+    const chartOptions={responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index',intersect:false},
+      layout:{padding:{top:20,left:8,right:8}},
+      plugins:{legend:{position:'bottom',labels:{color:chartInk,padding:18}},tooltip:{callbacks:{label:context=>context.dataset.yAxisID==='y1'?`${context.dataset.label}: ${Number(context.parsed.y).toFixed(1)}%`:`${context.dataset.label}: ${eok(context.parsed.y)}억`}}},
+      scales:{x:{grid:{display:false},ticks:{color:chartInk,font:{weight:'bold'}},border:{color:chartInk}},
+        y:{beginAtZero:true,grace:'15%',grid:{color:chartGrid},ticks:{color:chartInk,count:6,callback:value=>eok(value)},title:{display:true,text:'억원',color:chartInk}},
+        y1:{position:'right',grace:'15%',grid:{drawOnChartArea:false},ticks:{color:chartInk,count:6,callback:value=>Number(value).toFixed(1)+'%'},title:{display:true,text:'Operating income %',color:chartInk}}}};
+    const makeChart=(canvas,rows,annual)=>{
+      const labels=rows.map(row=>annual?(row.estimated?`${row.year} (E)`:String(row.year)):periodLabel(row.period));
+      const datasets=series.map(item=>({type:'bar',label:item.label,data:rows.map(row=>row[item.key]),
+        backgroundColor:rows.map(row=>row.estimated?item.fade:item.color),borderWidth:0}));
+      datasets.push({type:'line',label:'O. Profit%',data:rows.map(row=>row.operating_income_pct),yAxisID:'y1',
+        borderColor:'#FF0000',backgroundColor:'#FF0000',pointRadius:0,borderWidth:3,tension:0,
+        segment:{borderColor:context=>rows[context.p1DataIndex]?.estimated?'rgba(255,0,0,.7)':'#FF0000'}});
+      return new Chart(canvas,{type:'bar',data:{labels,datasets},options:chartOptions,plugins:[valueLabels]});
+    };
+    const annualRows=[...data.annual];if(data.annual_estimate)annualRows.push(data.annual_estimate);
+    annualChart=makeChart(document.querySelector('#annualChart'),annualRows,true);
+    quarterlyChart=makeChart(document.querySelector('#quarterlyChart'),data.quarterly,false);
+    const note=document.querySelector('#annualEstimateNote');
+    note.hidden=!data.annual_estimate;
+    if(data.annual_estimate)note.textContent=`${data.annual_estimate.year} estimate based on Q${data.annual_estimate.through_quarter} year-to-date results · 30% transparent`;
   }
   let routeRequestId = 0;
   async function streamNaverRoute(address, requestId) {
@@ -167,11 +233,8 @@
       routeNote.textContent=(receivedRoute?'Map screenshot unavailable: ':'Route details unavailable: ')+error.message;
     }
   }
-  async function loadCompany() {
-    const requestId=++routeRequestId;
-    button.disabled=true; statusEl.textContent='Fetching Open DART data…'; results.hidden=true;
-    try { const data=await fetch('/api/company?corp_code='+selectedCompany.corp_code).then(async r=>{const j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j;});
-      const c=data.company, latest=data.annual.at(-1)||{}, emp=data.employment[0]||{};
+  function renderCompany(data, requestId) {
+      const c=data.company, latest=data.annual.at(-1)||{}, employment=data.employment_summary||fallbackEmploymentSummary(data.employment||[]);
       document.querySelector('#companyMeta').textContent=`${c.corp_name||selectedCompany.corp_name} · ${c.stock_code||'unlisted'} · ${c.adres||'Address unavailable'}${c.hm_url ? ` · ${c.hm_url}` : ''}`;
       const routeLink=document.querySelector('#routeLink'); const routeNote=document.querySelector('#routeNote'); const routePanel=document.querySelector('#routePanel'); const routeFullLink=document.querySelector('#routeFullLink'); const routeSummary=document.querySelector('#routeSummary'); const routeSteps=document.querySelector('#routeSteps'); const routeDestination=document.querySelector('#routeDestination'); const routeScreenshotWrap=document.querySelector('#routeScreenshotWrap'); const routeScreenshot=document.querySelector('#routeScreenshot'); routeLink.hidden=true; routeNote.hidden=true; routePanel.hidden=true; routeFullLink.hidden=true; routeFullLink.removeAttribute('href'); routeSummary.textContent=''; routeSteps.replaceChildren(); routeDestination.textContent=''; routeScreenshotWrap.hidden=true; routeScreenshot.removeAttribute('src');
       if (c.adres) {
@@ -180,10 +243,34 @@
       } else {
         routePanel.hidden=false; routeSummary.textContent='Route unavailable'; routeNote.textContent='This company does not have a usable address.'; routeNote.hidden=false;
       }
-      setCard('employees', Number(String(emp.sm||emp.rgllbr_co||'').replaceAll(',',''))||null); setCard('payroll', Number(String(emp.jan_salary_am||'').replaceAll(',',''))||null);
+      setCard('employees', employment.employees); setCard('payroll', employment.average_payroll==null?null:employment.average_payroll/10000);
+      document.querySelector('#payrollUnit').textContent=employment.payroll_estimated ? '만원, estimated from reported group averages' : '만원, latest annual report';
+      const payrollLink=document.querySelector('#payrollLink');
+      if (data.employment_year||latest.year) payrollLink.href='/employees?corp_code='+encodeURIComponent(c.corp_code||selectedCompany.corp_code)+'&year='+encodeURIComponent(data.employment_year||latest.year)+'&name='+encodeURIComponent(c.corp_name||selectedCompany.corp_name);
+      else payrollLink.removeAttribute('href');
       ['assets','revenue','operating_income','equity','liabilities','net_income'].forEach(k=>setCard(k,rowValue(latest,k))); drawCharts(data); results.hidden=false; statusEl.textContent=`Loaded ${c.corp_name||selectedCompany.corp_name}.`;
+  }
+  async function loadCompany() {
+    const requestId=++routeRequestId;
+    button.disabled=true; statusEl.textContent='Fetching Open DART data…'; results.hidden=true;
+    try { const data=await fetch('/api/company?corp_code='+selectedCompany.corp_code).then(async r=>{const j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j;});
+      if(requestId!==routeRequestId)return;
+      lastCompanyData=data; renderCompany(data,requestId);
     } catch(e) { statusEl.textContent='Error: '+e.message; } finally { button.disabled=false; }
   }
+  document.querySelector('#payrollLink').addEventListener('click',()=>{
+    if(!selectedCompany||!lastCompanyData)return;
+    try {sessionStorage.setItem(returnKey,JSON.stringify({selectedCompany,data:lastCompanyData,scrollY:window.scrollY}));} catch {}
+  });
+  try {
+    const saved=sessionStorage.getItem(returnKey);
+    if(saved){sessionStorage.removeItem(returnKey);const state=JSON.parse(saved);
+      if(state.selectedCompany&&state.data){selectedCompany=state.selectedCompany;lastCompanyData=state.data;
+        input.value=selectedCompany.corp_name;selected.textContent=`Selected: ${selectedCompany.corp_name} (${selectedCompany.corp_code})`;
+        renderCompany(lastCompanyData,++routeRequestId);requestAnimationFrame(()=>window.scrollTo(0,state.scrollY||0));}
+    }
+  } catch {}
+  window.addEventListener('pageshow',event=>{if(event.persisted)try{sessionStorage.removeItem(returnKey);}catch{}});
   document.querySelector('#routeClose').addEventListener('click',()=>{document.querySelector('#routePanel').hidden=true;});
 </script>
 </body>
