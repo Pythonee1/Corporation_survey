@@ -418,7 +418,7 @@ class Handler(BaseHTTPRequestHandler):
                         ROUTE_WORKER = subprocess.Popen(
                             [node, str(ROOT / "naver_browser.js")],
                             cwd=ROOT, env=env, stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE,
                         )
                         ROUTE_WORKER_MTIME = script_mtime
                     ROUTE_WORKER.stdin.write((json.dumps({"address": address, "start_address": start_address}, ensure_ascii=False) + "\n").encode("utf-8"))

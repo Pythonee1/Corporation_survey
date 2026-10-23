@@ -18,11 +18,9 @@ async function selectAddress(page, position, address) {
   const queries = [...new Set([address, clean, road].filter(Boolean))];
   for (const query of queries) {
     await container.locator("input.input_search").fill(query);
-    // Starting points are often road addresses rather than named POIs.
-    // Accept both suggestion types for either endpoint.
-    const place = container.locator(
-      "[id^='instant-search-item-poi-'], [id^='instant-search-item-address-']"
-    ).first();
+    // Naver uses several suggestion item types depending on the address and
+    // region. Select the first instant-search result regardless of type.
+    const place = container.locator("[id^='instant-search-item-']").first();
     try {
       await place.waitFor({ state: "visible", timeout: 7000 });
       const selectedText = (await place.innerText()).replace(/\s+/g, " ").trim();
@@ -30,6 +28,7 @@ async function selectAddress(page, position, address) {
       return selectedText;
     } catch (error) {
       if (query === queries[queries.length - 1]) {
+        console.error(`Naver address suggestion lookup failed for ${position}: ${query}`);
         throw new Error(`Naver Maps found no selectable place for: ${address}`);
       }
     }
