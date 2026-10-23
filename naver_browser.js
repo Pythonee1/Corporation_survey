@@ -68,12 +68,25 @@ async function logFailure(page, trace, error) {
     dom = await page.evaluate(() => {
       const start = document.querySelector(".search_input_box_wrap.start");
       const goal = document.querySelector(".search_input_box_wrap.goal");
+      const input = start?.querySelector("input.input_search");
       const suggestions = [...document.querySelectorAll("[id^='instant-search-item-']")];
+      const bounds = input?.getBoundingClientRect();
+      const style = input && getComputedStyle(input);
       return {
         title: document.title,
         startContainer: Boolean(start),
         goalContainer: Boolean(goal),
-        startInput: Boolean(start?.querySelector("input.input_search")),
+        startInput: Boolean(input),
+        startInputState: input ? {
+          disabled: input.disabled,
+          readOnly: input.readOnly,
+          valueLength: input.value.length,
+          display: style.display,
+          visibility: style.visibility,
+          width: Math.round(bounds.width),
+          height: Math.round(bounds.height),
+          active: document.activeElement === input,
+        } : null,
         suggestionCount: suggestions.length,
         placeCount: suggestions.filter((item) => /instant-search-item-(poi|address)-/.test(item.id)).length,
         suggestions: suggestions.slice(0, 6).map((item) => ({ id: item.id, text: item.innerText.replace(/\s+/g, " ").slice(0, 100) })),
@@ -103,8 +116,24 @@ async function selectAddress(page, position, address, trace) {
   const queries = [...new Set([address, clean, road].filter(Boolean))];
   const exactAddress = clean.match(/([^\s]+(?:로\d*길|로|길|동))\s*(\d+(?:-\d+)?)(?:\s|$)/);
   for (const query of queries) {
+    const input = container.locator("input.input_search");
     trace.stage = `${position}.fill`;
-    await container.locator("input.input_search").fill(query);
+    try {
+      await input.fill(query, { timeout: 8000 });
+    } catch (error) {
+      trace.attempts.push({ position, query, action: "fill", error: error.message.split("\n")[0] });
+      // Playwright's force fill can silently leave a hidden input unchanged.
+      // Use the native setter so React receives the input event as a real edit.
+      trace.stage = `${position}.dom-fill`;
+      await input.evaluate((element, value) => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        setter.call(element, value);
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+      }, query);
+      if (await input.inputValue() !== query) {
+        throw new Error(`Naver Maps did not accept the ${position} address input`);
+      }
+    }
     // The `ac` row runs a general map search; only POI/address rows set a
     // directions endpoint. The first POI may be a different street number.
     const places = page.locator("[id^='instant-search-item-poi-'], [id^='instant-search-item-address-']");

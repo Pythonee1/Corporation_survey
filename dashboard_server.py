@@ -33,7 +33,9 @@ ROUTE_WORKER_MTIME = None
 
 
 class DashboardServer(ThreadingHTTPServer):
-    allow_reuse_address = False
+    # Render can restart the Linux listener while prior connections are still
+    # winding down. Keep exclusive binding on Windows for local runs.
+    allow_reuse_address = os.name != "nt"
 
     def server_bind(self):
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
