@@ -105,8 +105,8 @@ async function selectAddress(page, position, address, trace) {
     await container.locator("input.input_search").fill(query);
     // The `ac` row runs a general map search; only POI/address rows set a
     // directions endpoint. The first POI may be a different street number.
-    const places = container.locator(
-      "[id^='instant-search-item-poi-'], [id^='instant-search-item-address-']"
+    const places = page.locator(
+      "[id^='instant-search-item-poi-']:visible, [id^='instant-search-item-address-']:visible"
     );
     try {
       trace.stage = `${position}.suggestions`;
