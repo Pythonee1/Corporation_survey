@@ -8,7 +8,6 @@ import json
 import os
 import re
 import shutil
-import socket
 import subprocess
 import threading
 from datetime import date, timedelta
@@ -305,11 +304,10 @@ def main():
     print(f"Open http://127.0.0.1:{args.port} on this computer")
     if args.host == "0.0.0.0":
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-                probe.connect(("8.8.8.8", 80))
-                print(f"Open http://{probe.getsockname()[0]}:{args.port} on your phone (same Wi-Fi)")
-        except OSError:
-            print("Could not detect LAN IP; run ipconfig to find it")
+            tailscale_ip = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5).stdout.split()[0]
+            print(f"Open http://{tailscale_ip}:{args.port} on your phone (Tailscale)")
+        except (OSError, subprocess.SubprocessError, IndexError):
+            print("Could not detect Tailscale IP; run 'tailscale ip -4' to find it")
     ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
 
 
