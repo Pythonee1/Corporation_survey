@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>직원 등의 현황 · Corporation Survey</title>
+  <style>
+    :root { --ink:#172033; --muted:#6b7280; --blue:#2563eb; --line:#e5e7eb; --card:#fff; --bg:#f5f7fb; }
+    body.dark { --ink:#f5f5f5; --muted:#aaa; --blue:#82b6ff; --line:#353535; --card:#141414; --bg:#000; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--bg); font-family:Inter,Segoe UI,Arial,sans-serif; }
+    main { max-width:1180px; margin:auto; padding:34px 22px 60px; }
+    a { color:var(--blue); } h1 { margin:22px 0 5px; font-size:30px; }
+    .muted { color:var(--muted); } .summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin:24px 0; }
+    .card, .panel { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; }
+    .card small { color:var(--muted); } .card strong { display:block; margin:8px 0 3px; font-size:25px; }
+    .table-wrap { overflow-x:auto; } table { border-collapse:collapse; width:100%; min-width:900px; font-variant-numeric:tabular-nums; }
+    th, td { padding:10px 8px; border-bottom:1px solid var(--line); text-align:right; white-space:nowrap; }
+    th:first-child, td:first-child { text-align:left; } th:nth-child(2), td:nth-child(2) { text-align:center; }
+    th { color:var(--muted); font-size:12px; } tr.total { background:var(--bg); font-weight:700; }
+    .note { margin:14px 0 0; color:var(--muted); font-size:13px; line-height:1.5; }
+    @media (max-width:600px) { .summary { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <a id="backLink" href="/">← Corporation Survey</a>
+  <h1>직원 등의 현황</h1>
+  <div id="context" class="muted"></div>
+  <a id="filingLink" href="#" target="_blank" rel="noopener noreferrer" hidden>Open DART 공시 원문 ↗</a>
+  <div id="status" class="muted" role="status">자료를 불러오는 중…</div>
+  <section id="content" hidden>
+    <div class="summary">
+      <div class="card"><small>직원 수 합계</small><strong id="employees">—</strong><small>명</small></div>
+      <div class="card"><small>1인 평균 급여액</small><strong id="payroll">—</strong><small id="payrollCaption">만원</small></div>
+    </div>
+    <section class="panel">
+      <div class="table-wrap"><table>
+        <thead><tr><th>사업부문</th><th>성별</th><th>기간의 정함이 없는 근로자</th><th>단시간 근로자</th><th>기간제 근로자</th><th>기간제 단시간 근로자</th><th>직원 수 합계</th><th>평균 근속연수</th><th>연간급여 총액 (백만원)</th><th>1인 평균 급여액 (만원)</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+      <p id="note" class="note"></p>
+    </section>
+  </section>
+</main>
+<script>
+  if (localStorage.getItem('corporation-survey-theme') === 'dark') document.body.classList.add('dark');
+  const params=new URLSearchParams(location.search), code=params.get('corp_code'), year=params.get('year'), name=params.get('name');
+  document.querySelector('#backLink').addEventListener('click',event=>{
+    try {const previous=new URL(document.referrer);if(previous.origin===location.origin&&['/','/index.html'].includes(previous.pathname)){event.preventDefault();history.back();}} catch {}
+  });
+  const context=document.querySelector('#context'), status=document.querySelector('#status');
+  const fmt=value=>value==null?'—':new Intl.NumberFormat('ko-KR',{maximumFractionDigits:0}).format(value);
+  const num=value=>{const n=Number(String(value??'').replaceAll(',','').trim());return Number.isFinite(n)&&String(value??'').trim()!==''&&String(value).trim()!=='-'?n:null;};
+  const display=value=>num(value)==null?'—':fmt(num(value));
+  const million=value=>num(value)==null?'—':fmt(Math.round(num(value)/1000000));
+  const tenThousand=value=>num(value)==null?'—':fmt(Math.round(num(value)/10000));
+  context.textContent=[name,year&&`${year}년 사업보고서`].filter(Boolean).join(' · ');
+  async function load() {
+    if(!/^\d{8}$/.test(code||'')||!/^\d{4}$/.test(year||'')){status.textContent='올바른 회사 코드와 보고서 연도가 필요합니다.';return;}
+    try {
+      const response=await fetch('/api/employment?corp_code='+encodeURIComponent(code)+'&year='+encodeURIComponent(year));
+      const data=await response.json(); if(!response.ok)throw Error(data.error||'자료를 불러올 수 없습니다.');
+      const body=document.querySelector('#rows');
+      const columns=[r=>r.fo_bbm,r=>r.sexdstn,r=>display(r.rgllbr_co),r=>display(r.rgllbr_abacpt_labrr_co),r=>display(r.cnttk_co),r=>display(r.cnttk_abacpt_labrr_co),r=>display(r.sm),r=>r.avrg_cnwk_sdytrn?.trim()||'—',r=>million(r.fyer_salary_totamt),r=>tenThousand(r.jan_salary_am)];
+      for(const row of data.rows){const tr=document.createElement('tr');for(const column of columns){const td=document.createElement('td');td.textContent=column(row)||'—';tr.appendChild(td);}body.appendChild(tr);}
+      const total=data.summary.total_row;
+      if(total && !data.rows.some(row=>['합계','총계','전체'].includes(String(row.fo_bbm||'').replaceAll(' ','')))){
+        const values=['합계','—',display(total.rgllbr_co),display(total.rgllbr_abacpt_labrr_co),display(total.cnttk_co),display(total.cnttk_abacpt_labrr_co),display(total.sm),total.avrg_cnwk_sdytrn??'—',fmt(total.fyer_salary_totamt),fmt(total.jan_salary_am*100)];
+        const tr=document.createElement('tr');tr.className='total';for(const value of values){const td=document.createElement('td');td.textContent=value;tr.appendChild(td);}body.appendChild(tr);
+      }
+      const receipt=data.rows[0]?.rcept_no;
+      if(/^\d{14}$/.test(receipt||'')){const link=document.querySelector('#filingLink');link.href='https://dart.fss.or.kr/dsaf001/main.do?rcpNo='+receipt;link.hidden=false;}
+      document.querySelector('#employees').textContent=fmt(data.summary.employees);
+      document.querySelector('#payroll').textContent=data.summary.average_payroll==null?'—':fmt(data.summary.average_payroll/10000);
+      document.querySelector('#payrollCaption').textContent=data.summary.payroll_estimated?'만원 · 성별 평균 급여액의 직원 수 가중 평균':'만원';
+      document.querySelector('#note').textContent=data.summary.payroll_source==='filing'
+        ? '합계 행은 Open DART 공시 원문의 직원 등의 현황 표에서 가져왔습니다. 연간급여 총액은 백만원, 1인 평균 급여액은 만원 단위입니다.'
+        : data.summary.payroll_estimated
+          ? '공시 원문의 전체 평균을 읽을 수 없어 성별합계의 직원 수로 가중 평균했습니다. 공시 원문의 전체 평균과 차이가 날 수 있습니다.'
+          : '직원 수와 평균 급여액은 Open DART 직원 현황 API의 합계 행을 사용했습니다.';
+      if(!data.rows.length)status.textContent='해당 보고서의 직원 현황이 없습니다.';
+      else {status.hidden=true;document.querySelector('#content').hidden=false;}
+    } catch(error) {status.textContent='오류: '+error.message;}
+  }
+  load();
+</script>
+</body>
+</html>

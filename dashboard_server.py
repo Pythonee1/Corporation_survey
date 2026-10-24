@@ -4,13 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
+import zipfile
 from datetime import date, timedelta
+from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -25,6 +29,16 @@ API = "https://opendart.fss.or.kr/api"
 ROOT = Path(__file__).resolve().parent
 ROUTE_LOCK = threading.Lock()
 ROUTE_WORKER = None
+ROUTE_WORKER_MTIME = None
+
+
+class DashboardServer(ThreadingHTTPServer):
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
 
 class DartError(RuntimeError):
@@ -66,20 +80,106 @@ def number(value):
         return None
 
 
-def metric_rows(rows):
+@lru_cache(maxsize=128)
+def filing_employment_total(key, receipt):
+    """Read the disclosed total row omitted by some empSttus API responses."""
+    if not re.fullmatch(r"\d{14}", str(receipt or "")):
+        return None
+    query = urlencode({"crtfc_key": key, "rcept_no": receipt})
+    req = Request(f"{API}/document.xml?{query}", headers={"User-Agent": "CorporationSurveyDashboard/1.0"})
+    with urlopen(req, timeout=45) as response:
+        archive = response.read()
+    with zipfile.ZipFile(io.BytesIO(archive)) as files:
+        for name in files.namelist():
+            if not name.lower().endswith(".xml"):
+                continue
+            text = files.read(name).decode("utf-8-sig", errors="replace")
+            tables = re.finditer(r'<TABLE-GROUP\b[^>]*\bACLASS="EMPLOYEE"[^>]*>(.*?)</TABLE-GROUP>', text, re.S | re.I)
+            for table in tables:
+                def field(code):
+                    match = re.search(r'<(?:TE|TD)\b[^>]*\bACODE="' + code + r'"[^>]*>([^<]*)', table.group(1), re.I)
+                    return number(match.group(1)) if match else None
+                count, average_million = field("EMP_CNT"), field("EMP_VICT")
+                if count is not None and average_million is not None:
+                    return {"employees": count, "average_payroll": average_million * 1_000_000,
+                            "total_row": {"rgllbr_co": field("EMP_REOT"),
+                                          "rgllbr_abacpt_labrr_co": field("EMP_REOST"),
+                                          "cnttk_co": field("EMP_COCT"),
+                                          "cnttk_abacpt_labrr_co": field("EMP_COCST"),
+                                          "sm": count, "avrg_cnwk_sdytrn": field("EMP_AVYT"),
+                                          "fyer_salary_totamt": field("EMP_AICT"),
+                                          "jan_salary_am": average_million}}
+    return None
+
+
+def employment_summary(rows, filing_total=None):
+    """Use filing totals without counting division rows and gender subtotals twice."""
+    label = lambda value: re.sub(r"\s+", "", str(value or ""))
+    is_overall = lambda row: label(row.get("fo_bbm")) in {"합계", "총계", "전체"} or label(row.get("sexdstn")) in {"합계", "총계", "전체"}
+    overall = next((row for row in rows if is_overall(row)), None)
+    subtotals = [row for row in rows if label(row.get("fo_bbm")) == "성별합계"]
+    basis = subtotals or [row for row in rows if not is_overall(row)]
+    employees = filing_total.get("employees") if filing_total else None
+    if employees is None:
+        employees = number(overall.get("sm")) if overall else None
+    if employees is None:
+        counts = [number(row.get("sm")) for row in basis]
+        employees = sum(value for value in counts if value is not None) if any(value is not None for value in counts) else None
+
+    payroll = filing_total.get("average_payroll") if filing_total else None
+    if payroll is None:
+        payroll = number(overall.get("jan_salary_am")) if overall else None
+    estimated = False
+    source = "filing" if payroll is not None and filing_total else "api" if payroll is not None else "unavailable"
+    if payroll is None:
+        weighted = [(number(row.get("sm")), number(row.get("jan_salary_am"))) for row in basis]
+        weighted = [(count, salary) for count, salary in weighted if count is not None and count > 0 and salary is not None]
+        if weighted:
+            payroll = round(sum(count * salary for count, salary in weighted) / sum(count for count, _ in weighted))
+            estimated = True
+            source = "estimated"
+    return {"employees": employees, "average_payroll": payroll, "payroll_estimated": estimated,
+            "payroll_source": source, "total_row": filing_total.get("total_row") if filing_total else None}
+
+
+def reported_employment_summary(key, rows):
+    total = None
+    if rows:
+        try:
+            total = filing_employment_total(key, rows[0].get("rcept_no"))
+        except (OSError, ValueError, zipfile.BadZipFile):
+            pass
+    return employment_summary(rows, total)
+
+
+def metric_rows(rows, amount_field="thstrm_amount"):
     patterns = {
-        "revenue": ("매출액", "매출", "Revenue"),
-        "operating_income": ("영업이익", "Operating income"),
-        "net_income": ("당기순이익", "순이익", "Net income"),
+        "revenue": ("매출액", "영업수익", "Revenue"),
+        "operating_income": ("영업이익", "영업손익", "영업손실", "Operating income", "Operating loss"),
+        "net_income": ("당기순이익", "당기순손익", "분기순이익", "분기순손익", "Net income"),
         "assets": ("자산총계", "Total assets"),
         "liabilities": ("부채총계", "Total liabilities"),
         "equity": ("자본총계", "Total equity"),
     }
+    account_ids = {
+        "revenue": {"ifrs-full_Revenue", "ifrs_Revenue", "dart_Revenue"},
+        "operating_income": {"dart_OperatingIncomeLoss", "ifrs-full_ProfitLossFromOperatingActivities"},
+        "net_income": {"ifrs-full_ProfitLoss", "ifrs_ProfitLoss"},
+        "assets": {"ifrs-full_Assets", "ifrs_Assets"},
+        "liabilities": {"ifrs-full_Liabilities", "ifrs_Liabilities"},
+        "equity": {"ifrs-full_Equity", "ifrs_Equity"},
+    }
     result = {}
     for key, names in patterns.items():
-        row = next((r for r in rows if any(name.lower() in str(r.get("account_nm", "")).lower() for name in names)), None)
+        statement = {"BS"} if key in {"assets", "liabilities", "equity"} else {"IS", "CIS"}
+        candidates = [r for r in rows if r.get("sj_div") in statement or not r.get("sj_div")]
+        row = next((r for r in candidates if r.get("account_id") in account_ids[key]
+                    and number(r.get(amount_field)) is not None), None)
+        if row is None:
+            row = next((r for r in candidates if any(name.lower() in str(r.get("account_nm", "")).lower() for name in names)
+                        and number(r.get(amount_field)) is not None), None)
         if row:
-            raw_amount = number(row.get("thstrm_amount"))
+            raw_amount = number(row.get(amount_field))
             # Open DART returns these account amounts in KRW. The dashboard
             # presents every financial figure in million KRW.
             result[key] = round(raw_amount / 1_000_000, 2) if raw_amount is not None else None
@@ -90,7 +190,7 @@ def with_margin(metrics):
     revenue = metrics.get("revenue")
     operating = metrics.get("operating_income")
     metrics = dict(metrics)
-    metrics["operating_income_pct"] = round(operating / revenue * 100, 2) if revenue else None
+    metrics["operating_income_pct"] = round(operating / revenue * 100, 1) if operating is not None and revenue not in (None, 0) else None
     return metrics
 
 
@@ -127,6 +227,7 @@ def quarterly_series(key, corp_code):
     start = end - timedelta(days=400)
     data = dart_json(key, "list", corp_code=corp_code, bgn_de=start.strftime("%Y%m%d"), end_de=end.strftime("%Y%m%d"), pblntf_ty="A", last_reprt_at="N", sort="date", sort_mth="desc", page_no="1", page_count="100")
     reports = []
+    cumulative_by_year = {}
     seen = set()
     for row in data.get("list", []):
         code = disclosure_kind(row)
@@ -140,8 +241,12 @@ def quarterly_series(key, corp_code):
         try:
             reprt_code = "11011" if code == "annual" else code
             financials = dart_json(key, "fnlttSinglAcntAll", corp_code=corp_code, bsns_year=year, reprt_code=reprt_code, fs_div="CFS")
-            metrics = with_margin(metric_rows(financials.get("list", [])))
+            rows = financials.get("list", [])
+            metrics = with_margin(metric_rows(rows))
             if metrics:
+                quarter = {"11013": 1, "11012": 2, "11014": 3}.get(reprt_code)
+                if code == "11014":
+                    cumulative_by_year[int(year)] = metric_rows(rows, "thstrm_add_amount")
                 if code == "11012":
                     period = f"{year} Q2"
                 elif code == "11013":
@@ -150,7 +255,11 @@ def quarterly_series(key, corp_code):
                     period = f"{year} Q3"
                 else:
                     period = f"{year} Q4"
-                reports.append({"period": period, "year": int(year), "report_code": reprt_code, **metrics})
+                report = {"period": period, "year": int(year), "report_code": reprt_code, **metrics}
+                if quarter:
+                    report["quarter"] = quarter
+                    report["cumulative"] = metric_rows(rows, "thstrm_add_amount") or metric_rows(rows)
+                reports.append(report)
         except DartError:
             continue
     reports.sort(key=lambda item: (item["year"], item["period"]))
@@ -159,18 +268,35 @@ def quarterly_series(key, corp_code):
     # latest available annual year by subtracting its 9-month cumulative data.
     annual_rows = [r for r in reports if r.get("report_code") == "11011"]
     for annual in annual_rows:
-        q3 = next((r for r in reports if r["year"] == annual["year"] and r.get("report_code") == "11014"), None)
-        if q3:
+        q3_cumulative = cumulative_by_year.get(annual["year"])
+        if q3_cumulative:
             q4 = dict(annual)
             q4["period"] = f"{annual['year']} Q4"
+            q4["report_code"] = "derived_q4"
             for key in ("revenue", "operating_income", "net_income"):
-                if annual.get(key) is not None and q3.get(key) is not None:
-                    q4[key] = annual[key] - q3[key]
-            q4["operating_income_pct"] = round(q4["operating_income"] / q4["revenue"] * 100, 2) if q4.get("revenue") else None
+                q4[key] = round(annual[key] - q3_cumulative[key], 2) if annual.get(key) is not None and q3_cumulative.get(key) is not None else None
+            q4["operating_income_pct"] = round(q4["operating_income"] / q4["revenue"] * 100, 1) if q4.get("operating_income") is not None and q4.get("revenue") not in (None, 0) else None
             reports.append(q4)
     reports = [r for r in reports if r.get("report_code") != "11011"]
     reports.sort(key=lambda item: (item["year"], item["period"]))
     return reports[-4:]
+
+
+def current_year_estimate(annual, quarterly):
+    year = date.today().year
+    if any(row["year"] == year for row in annual):
+        return None
+    candidates = [row for row in quarterly if row["year"] == year and row.get("quarter")]
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda row: row["quarter"])
+    factor = 4 / latest["quarter"]
+    cumulative = latest.get("cumulative", {})
+    values = {key: round(cumulative[key] * factor, 2) if cumulative.get(key) is not None else None
+              for key in ("revenue", "operating_income", "net_income")}
+    if all(value is None for value in values.values()):
+        return None
+    return {"year": year, "estimated": True, "through_quarter": latest["quarter"], **with_margin(values)}
 
 
 def company_data(key, corp_code):
@@ -178,14 +304,16 @@ def company_data(key, corp_code):
     annual = annual_series(key, corp_code)
     quarterly = quarterly_series(key, corp_code)
     latest = annual[-1] if annual else {}
-    employment = {}
+    employment = []
     if annual:
         year = str(latest["year"])
         try:
             employment = dart_json(key, "empSttus", corp_code=corp_code, bsns_year=year, reprt_code="11011").get("list", [])
         except DartError:
             employment = []
-    return {"company": company, "annual": annual, "quarterly": quarterly, "employment": employment}
+    return {"company": company, "annual": annual, "annual_estimate": current_year_estimate(annual, quarterly),
+            "quarterly": quarterly, "employment": employment,
+            "employment_year": latest.get("year"), "employment_summary": reported_employment_summary(key, employment)}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -203,8 +331,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path in {"/", "/index.html"}:
-            body = (ROOT / "dashboard.html").read_bytes()
+        if parsed.path in {"/", "/index.html", "/employees"}:
+            body = (ROOT / ("employees.html" if parsed.path == "/employees" else "dashboard.html")).read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -212,8 +340,13 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         if parsed.path == "/api/search":
-            query = parse_qs(parsed.query).get("q", [""])[0].strip().lower()
-            matches = [row for row in self.corporations if query in row["corp_name"].lower()][:30] if query else []
+            query = parse_qs(parsed.query).get("q", [""])[0].strip().casefold()
+            matches = sorted(
+                (row for row in self.corporations if query in row["corp_name"].casefold()),
+                key=lambda row: (0 if row["corp_name"].casefold() == query else
+                                 1 if row["corp_name"].casefold().startswith(query) else 2,
+                                 row["corp_name"].casefold(), row["corp_code"]),
+            )[:30] if query else []
             self.send_json(matches)
             return
         if parsed.path == "/api/company":
@@ -223,8 +356,21 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"error": str(exc)}, 500)
             return
+        if parsed.path == "/api/employment":
+            params = parse_qs(parsed.query)
+            code = params.get("corp_code", [""])[0]
+            year = params.get("year", [""])[0]
+            if not re.fullmatch(r"\d{8}", code) or not re.fullmatch(r"\d{4}", year):
+                self.send_json({"error": "A corporation code and report year are required"}, 400)
+                return
+            try:
+                rows = dart_json(self.api_key, "empSttus", corp_code=code, bsns_year=year, reprt_code="11011").get("list", [])
+                self.send_json({"year": year, "rows": rows, "summary": reported_employment_summary(self.api_key, rows)})
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, 500)
+            return
         if parsed.path == "/api/route-stream":
-            global ROUTE_WORKER
+            global ROUTE_WORKER, ROUTE_WORKER_MTIME
             address = parse_qs(parsed.query).get("address", [""])[0].strip()
             if not address:
                 self.send_json({"error": "Destination address is required"}, 400)
@@ -247,12 +393,22 @@ class Handler(BaseHTTPRequestHandler):
             env["NAVER_PROFILE_PATH"] = str(profile)
             with ROUTE_LOCK:
                 try:
+                    script_mtime = (ROOT / "naver_browser.js").stat().st_mtime_ns
+                    if ROUTE_WORKER is not None and ROUTE_WORKER.poll() is None and ROUTE_WORKER_MTIME != script_mtime:
+                        ROUTE_WORKER.stdin.close()
+                        try:
+                            ROUTE_WORKER.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            ROUTE_WORKER.terminate()
+                            ROUTE_WORKER.wait(timeout=5)
+                        ROUTE_WORKER = None
                     if ROUTE_WORKER is None or ROUTE_WORKER.poll() is not None:
                         ROUTE_WORKER = subprocess.Popen(
                             [node, str(ROOT / "naver_browser.js")],
                             cwd=ROOT, env=env, stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                         )
+                        ROUTE_WORKER_MTIME = script_mtime
                     ROUTE_WORKER.stdin.write((json.dumps({"address": address, "start_address": START_ADDRESS}, ensure_ascii=False) + "\n").encode("utf-8"))
                     ROUTE_WORKER.stdin.flush()
                 except Exception as exc:
@@ -290,8 +446,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--api-key", default=os.getenv("OPENDART_API_KEY"))
     parser.add_argument("--corporations", default="temp/corporations.txt")
-    parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--host", default="0.0.0.0", help="Use 127.0.0.1 to restrict access to this computer only")
+    default_port = int(os.getenv("PORT", "8000"))
+    default_host = os.getenv("HOST") or ("0.0.0.0" if os.getenv("PORT") else "127.0.0.1")
+    parser.add_argument("--host", default=default_host)
+    parser.add_argument("--port", type=int, default=default_port)
     args = parser.parse_args()
     if not args.api_key:
         parser.error("--api-key or OPENDART_API_KEY is required")
@@ -301,14 +459,9 @@ def main():
     Handler.corporations = load_corporations(corp_path)
     Handler.api_key = args.api_key
     print(f"Loaded {len(Handler.corporations):,} corporations")
-    print(f"Open http://127.0.0.1:{args.port} on this computer")
-    if args.host == "0.0.0.0":
-        try:
-            tailscale_ip = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5).stdout.split()[0]
-            print(f"Open http://{tailscale_ip}:{args.port} on your phone (Tailscale)")
-        except (OSError, subprocess.SubprocessError, IndexError):
-            print("Could not detect Tailscale IP; run 'tailscale ip -4' to find it")
-    ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
+    display_host = "127.0.0.1" if args.host == "0.0.0.0" else args.host
+    print(f"Open http://{display_host}:{args.port} in your browser")
+    DashboardServer((args.host, args.port), Handler).serve_forever()
 
 
 if __name__ == "__main__":

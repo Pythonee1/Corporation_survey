@@ -19,11 +19,14 @@ async function selectAddress(page, position, address) {
   const queries = [...new Set([address, clean, road].filter(Boolean))];
   for (const query of queries) {
     await container.locator("input.input_search").fill(query);
-    const place = container.locator("[id^='instant-search-item-poi-']").first();
+    const place = container.locator(position === "start"
+      ? "[id^='instant-search-item-poi-']"
+      : "[id^='instant-search-item-poi-'], [id^='instant-search-item-address-']").first();
     try {
-      await place.waitFor({ state: "visible", timeout: position === "start" ? 7000 : 3500 });
+      await place.waitFor({ state: "visible", timeout: 7000 });
+      const selectedText = (await place.innerText()).replace(/\s+/g, " ").trim();
       await place.click();
-      return;
+      return selectedText;
     } catch (error) {
       if (query === queries[queries.length - 1]) {
         throw new Error(`Naver Maps found no selectable place for: ${address}`);
@@ -32,26 +35,53 @@ async function selectAddress(page, position, address) {
   }
 }
 
-async function runRoute(context, destination, startAddress) {
+async function waitForMap(page, mapClip) {
+  await page.evaluate(() => document.fonts.ready);
+  // Naver renders the route card before its map tiles and route overlay finish.
+  // Require the visible map images to load and the map pixels to stop changing.
+  let previous;
+  let stableSamples = 0;
+  const deadline = Date.now() + 20000;
+  while (Date.now() < deadline) {
+    const imagesReady = await page.evaluate(({ x, y, width, height }) =>
+      [...document.images].every((image) => {
+        const box = image.getBoundingClientRect();
+        const onMap = box.width > 0 && box.height > 0 && box.left < x + width
+          && box.right > x && box.top < y + height && box.bottom > y;
+        return !onMap || (image.complete && image.naturalWidth > 0);
+      }), mapClip);
+    const current = await page.screenshot({ type: "png", clip: mapClip, timeout: 15000 });
+    stableSamples = imagesReady && previous?.equals(current) ? stableSamples + 1 : 0;
+    if (stableSamples >= 2) return;
+    previous = current;
+    await page.waitForTimeout(800);
+  }
+  throw new Error("Naver route loaded, but the map did not finish rendering");
+}
+
+async function runRoute(page, destination, startAddress) {
     if (!destination) throw new Error("Destination address is required");
     if (!startAddress) throw new Error("Starting address is required");
-    const page = context.pages().find((candidate) => !candidate.isClosed() && candidate.url().startsWith("https://map.naver.com/"))
-      || await context.newPage();
     page.setDefaultTimeout(12000);
     await page.goto("https://map.naver.com/p/directions/-/-/-/transit", {
       waitUntil: "domcontentloaded",
       timeout: 25000,
     });
-    await selectAddress(page, "start", startAddress);
-    await selectAddress(page, "goal", destination);
+    const selectedStart = await selectAddress(page, "start", startAddress);
+    const selectedGoal = await selectAddress(page, "goal", destination);
+    const card = page.locator("[class*=StyledPubtransDirectionsSummaryItem]").first();
+    await card.waitFor({ state: "hidden", timeout: 5000 });
     await page.getByRole("button", { name: "길찾기", exact: true }).click();
 
-    const card = page.locator("[class*=StyledPubtransDirectionsSummaryItem]").first();
-    await Promise.race([
-      card.waitFor({ state: "visible", timeout: 25000 }),
-      page.locator("[class*=StyledDirectionsError]").first().waitFor({ state: "visible", timeout: 25000 })
-        .then(() => { throw new Error("Naver Maps could not load the public-transit route"); }),
-    ]);
+    try {
+      await Promise.race([
+        card.waitFor({ state: "visible", timeout: 25000 }),
+        page.locator("[class*=StyledDirectionsError]").first().waitFor({ state: "visible", timeout: 25000 })
+          .then(() => { throw new Error("Naver Maps could not load the public-transit route"); }),
+      ]);
+    } catch (error) {
+      throw new Error(`Naver could not load a public-transit route from ${selectedStart} to ${selectedGoal}: ${error.message.split("\n")[0]}`);
+    }
 
     const details = await card.evaluate((root, destinationAddress) => {
       const clean = (value) => (value || "").trim().replace(/\s+/g, " ");
@@ -103,7 +133,24 @@ async function runRoute(context, destination, startAddress) {
     }
     emit({ type: "route", web_url: page.url(), details });
 
-    const png = await page.screenshot({ type: "png", timeout: 15000 });
+    const viewport = page.viewportSize();
+    const directionsForm = await page.locator(".search_input_box_wrap.start").boundingBox();
+    if (!viewport || !directionsForm) {
+      throw new Error("Naver directions form disappeared before the map screenshot");
+    }
+    // Keep the results panel and map; trim the top tabs and outer map controls.
+    const left = Math.max(0, Math.floor(directionsForm.x) - 12);
+    const top = Math.max(0, Math.floor(directionsForm.y) - 12);
+    const right = viewport.width - 60;
+    const clip = { x: left, y: top, width: right - left, height: viewport.height - top };
+    const mapClip = {
+      x: Math.min(right - 100, Math.ceil(directionsForm.x + directionsForm.width + 20)),
+      y: top,
+      width: Math.max(100, right - Math.ceil(directionsForm.x + directionsForm.width + 20)),
+      height: viewport.height - top,
+    };
+    await waitForMap(page, mapClip);
+    const png = await page.screenshot({ type: "png", clip, timeout: 15000 });
     emit({ type: "screenshot", screenshot_data: png.toString("base64") });
 }
 
@@ -113,7 +160,7 @@ async function main() {
     headless: process.env.NAVER_HEADLESS !== "0",
     executablePath: edgePath,
     locale: "ko-KR",
-    viewport: { width: 1280, height: 900 },
+    viewport: { width: 1560, height: 1100 },
     args: ["--no-first-run", "--no-default-browser-check"],
   });
   if (!context.pages().length) await context.newPage();
@@ -126,11 +173,16 @@ async function main() {
       emit({ type: "error", error: "Naver Maps browser timed out" });
       process.exit(1);
     }, 75000);
+    let page;
     try {
-      await runRoute(context, request.address, request.start_address);
+      // A new tab starts without the previous request's visible result card.
+      // The persistent context still shares its Naver login and cache.
+      page = await context.newPage();
+      await runRoute(page, request.address, request.start_address);
     } catch (error) {
       emit({ type: "error", error: error.message });
     } finally {
+      if (page && !page.isClosed()) await page.close().catch(() => {});
       clearTimeout(watchdog);
       emit({ type: "complete" });
     }
